@@ -14,3 +14,6 @@ dsh-peerbar.json
 *-cache.json
 *.pem
 *.key
+
+# 删除操作的回收站（打包产物被 rm 后落到这里）
+.Trash-*/
