@@ -66,6 +66,10 @@ try {
       sessionRows: document.querySelectorAll('.koUx-W_sessionRow').length,
       remoteTags: [...document.querySelectorAll('.dshp-tag')].map((node) => node.textContent),
       firstGroups: rows.slice(0, 5).map((node) => node.innerText.replace(/\s+/g, ' ').trim()),
+      blankRows: [...document.querySelectorAll('.koUx-W_sessionRow .koUx-W_title')].filter(
+        (node) => node.textContent.trim() === '未命名会话',
+      ).length,
+      menuButtons: document.querySelectorAll('.koUx-W_rowActions button').length,
       sessionPaddingLeft: session ? getComputedStyle(session).paddingLeft : null,
       treeHeight: tree ? tree.getBoundingClientRect().height : 0,
     }
@@ -78,6 +82,37 @@ try {
   if (first.remoteTags.length === 0) problems.push('侧栏没有远端 Host 标签（.dshp-tag）')
   if (first.sessionPaddingLeft && Number.parseFloat(first.sessionPaddingLeft) < 20) {
     problems.push(`会话行没有缩进（padding-left=${first.sessionPaddingLeft}）`)
+  }
+  if (first.menuButtons === 0) problems.push('行内没有任何菜单按钮（.koUx-W_rowActions button 为 0）')
+
+  // 行菜单：先 hover 出 ⋯，再点开，确认菜单项与定位
+  const menuItemsOf = async () => {
+    return page.evaluate(() => {
+      const candidates = [...document.querySelectorAll('[role="menuitem"], [role="menu"] button')]
+      return candidates.map((node) => node.textContent.trim()).filter(Boolean)
+    })
+  }
+  if (await page.$('.koUx-W_sessionRow')) {
+    await page.hover('.koUx-W_sessionRow')
+    await page.click('.koUx-W_sessionRow .koUx-W_rowActions button')
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    const menuItems = await menuItemsOf()
+    await page.screenshot({ path: path.join(OUT, 'ui-4-session-menu.png') })
+    first.menuItems = menuItems
+    if (menuItems.length === 0) problems.push('会话行菜单点开后没有任何菜单项')
+    await page.keyboard.press('Escape')
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+  if (await page.$('.koUx-W_projectRow')) {
+    await page.hover('.koUx-W_projectRow')
+    await page.click('.koUx-W_projectRow .koUx-W_rowActions button:last-child')
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    const items = await menuItemsOf()
+    await page.screenshot({ path: path.join(OUT, 'ui-5-workspace-menu.png') })
+    first.workspaceMenuItems = items
+    if (items.length === 0) problems.push('工作区行菜单点开后没有任何菜单项')
+    await page.keyboard.press('Escape')
+    await new Promise((resolve) => setTimeout(resolve, 200))
   }
 
   // 展开第一个远端组，最多试 4 条会话，取"有真人发言/富文本"的那条截图
