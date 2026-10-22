@@ -71,7 +71,10 @@ POST /api/session/page
 
 ## 4. 落地的裁剪规则（`lib/transcript.js`）
 
-- 只保留 `user/message`（有 text）与 `assistant/message`（有 text 或有 tool-call）。
+- 只保留 `user/message`（有 text，且 `source.kind` 必须是 `user` 或缺省）与
+  `assistant/message`（有 text 或有 tool-call）。`user/message` 里的
+  `time-context` / `agent-instructions` / `runtime-context` / `tool-jobs` 是系统注入，
+  实测 8 个会话里占 28/33，全部丢弃，否则正文会显示成「你：Time sampled while …」。
 - 纯 reasoning 的消息丢弃；只有工具调用的消息保留，`text` 为空、`tools` 带工具名，
   否则连续多轮会看起来像断片。
 - 单条文本超过 8000 字截断并标注原长；`maxMessages` 收口到 1–50，默认 20。

@@ -3,9 +3,14 @@ import assert from 'node:assert/strict'
 
 import { clampLimit, oldestSeq, readTranscriptFrom, toTranscript } from '../lib/transcript.js'
 
-const userEvent = (text, seq = 1) => ({
+const userEvent = (text, seq = 1, kind = 'user') => ({
   type: 'event',
-  event: { type: 'user/message', seq, time: 1000 + seq, data: { role: 'user', content: [{ type: 'text', text }] } },
+  event: {
+    type: 'user/message',
+    seq,
+    time: 1000 + seq,
+    data: { role: 'user', content: [{ type: 'text', text }], ...(kind === null ? {} : { source: { kind } }) },
+  },
 })
 
 const assistantEvent = (content, seq = 2) => ({
@@ -36,6 +41,20 @@ test('user 与 assistant 的文本按 seq 保留', () => {
 test('纯 reasoning 的 assistant 事件被丢掉', () => {
   const messages = toTranscript([assistantEvent([{ type: 'reasoning', text: '想一想' }])])
   assert.equal(messages.length, 0)
+})
+
+test('只保留 source.kind=user 的发言，系统注入不算用户', () => {
+  const messages = toTranscript([
+    userEvent('真的问题', 1, 'user'),
+    userEvent('Time sampled while preparing turn 1', 2, 'time-context'),
+    userEvent('<system-reminder>updated instructions</system-reminder>', 3, 'agent-instructions'),
+    userEvent('runtime note', 4, 'runtime-context'),
+    userEvent('没有 source 的老格式', 5, null),
+  ])
+  assert.deepEqual(
+    messages.map((m) => m.text),
+    ['真的问题', '没有 source 的老格式'],
+  )
 })
 
 const toolCall = (callId, name, args, seq) => ({
