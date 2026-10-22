@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { clampLimit, readTranscriptFrom, toTranscript } from '../lib/transcript.js'
+import { clampLimit, oldestSeq, readTranscriptFrom, toTranscript } from '../lib/transcript.js'
 
 const userEvent = (text, seq = 1) => ({
   type: 'event',
@@ -99,4 +99,29 @@ test('readTranscriptFrom 把 signal 传给 controller（少传会炸）', async 
   assert.equal(result.messages.length, 1)
   assert.equal(result.messages[0].text, 'hi')
   assert.equal(result.hasMore, false)
+  assert.equal(result.nextBeforeSeq, 1)
+})
+
+test('oldestSeq 取最小 seq，忽略坏记录', () => {
+  assert.equal(oldestSeq([{ event: { seq: 9 } }, { event: { seq: 3 } }, { event: {} }, null]), 3)
+  assert.equal(oldestSeq([]), null)
+  assert.equal(oldestSeq(null), null)
+})
+
+test('readTranscriptFrom 把 beforeSeq 透传（翻页游标）', async () => {
+  let seenRequest = null
+  const controller = {
+    async projections() {
+      return { asOfSeq: 100 }
+    },
+    async page(request) {
+      seenRequest = request
+      return { records: [{ event: { type: 'user/message', seq: 40, data: { content: [{ type: 'text', text: '老消息' }] } } }], hasMore: true }
+    },
+  }
+  const result = await readTranscriptFrom(controller, 's1', 10, { beforeSeq: 55 })
+  assert.equal(seenRequest.beforeSeq, 55)
+  assert.equal(seenRequest.throughSeq, 100)
+  assert.equal(result.nextBeforeSeq, 40)
+  assert.equal(result.hasMore, true)
 })
