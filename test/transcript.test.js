@@ -126,6 +126,43 @@ test('工具结果超长截断，错误结果带标记', () => {
   assert.match(tool.result, /已截断，共 30 字/)
 })
 
+test('todo/write 变成消息上的任务列表', () => {
+  const messages = toTranscript([
+    assistantEvent([{ type: 'text', text: '开始干活' }], 1),
+    {
+      type: 'event',
+      event: { type: 'todo/write', seq: 2, time: 2000, data: { todos: [{ content: '写 A', status: 'completed' }, { content: '写 B', status: 'pending' }] } },
+    },
+  ])
+  assert.equal(messages.length, 1)
+  assert.deepEqual(messages[0].todos, [
+    { content: '写 A', status: 'completed' },
+    { content: '写 B', status: 'pending' },
+  ])
+})
+
+test('user 消息带附件部件', () => {
+  const messages = toTranscript([
+    {
+      type: 'event',
+      event: {
+        type: 'user/message',
+        seq: 1,
+        time: 1000,
+        data: {
+          source: { kind: 'user' },
+          content: [
+            { type: 'file', name: '报告.docx', meta: '1.2 MB' },
+            { type: 'text', text: '看看这个' },
+          ],
+        },
+      },
+    },
+  ])
+  assert.equal(messages.length, 1)
+  assert.deepEqual(messages[0].files, [{ name: '报告.docx', meta: '1.2 MB' }])
+})
+
 test('过程事件（step/start、job/*）不进正文', () => {
   const messages = toTranscript([
     assistantEvent([{ type: 'text', text: '好' }], 1),

@@ -204,6 +204,9 @@ try {
             toolChips: document.querySelectorAll('.dshp-tool').length,
             richContent: body ? body.querySelectorAll('table, pre, h1, h2, h3, ul, ol, blockquote').length : 0,
             firstToolWidth: rect ? Math.round(rect.width) : null,
+          taskRows: document.querySelectorAll('.KXphHq_title').length,
+          fileCards: document.querySelectorAll('.vq-vBq_fileCard').length,
+          composer: document.querySelectorAll('.if816a_composerSeat').length,
             preview: (body?.innerText ?? '').slice(0, 120),
           }
         })
@@ -220,6 +223,7 @@ try {
     first.panel = panel
 
     if (panel.messages === 0 && panel.userBubbles === 0) problems.push('正文面板没有任何消息')
+    if (panel.composer === 0) problems.push('底部没有 composer 容器')
     if (panel.firstToolWidth && panel.firstToolWidth > 200) {
       problems.push(`工具调用没有收成胶囊（首个体宽 ${panel.firstToolWidth}px）`)
     }
