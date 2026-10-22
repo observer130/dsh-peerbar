@@ -1,0 +1,16 @@
+# 依赖
+node_modules/
+
+# 本地 agent 工作区（记忆、离线文档副本等），不入库
+.workbuddy/
+
+# 日志与临时产物
+*.log
+*.tgz
+.DS_Store
+
+# 本机数据：绝不提交令牌 / 缓存 / 证书
+dsh-peerbar.json
+*-cache.json
+*.pem
+*.key
