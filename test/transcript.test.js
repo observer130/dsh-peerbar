@@ -38,20 +38,83 @@ test('纯 reasoning 的 assistant 事件被丢掉', () => {
   assert.equal(messages.length, 0)
 })
 
-test('只有工具调用的 assistant 事件保留工具名', () => {
-  const messages = toTranscript([assistantEvent([{ type: 'tool-call', name: 'bash' }, { type: 'tool-call', toolName: 'read_file' }])])
-  assert.equal(messages.length, 1)
-  assert.equal(messages[0].text, '')
-  assert.deepEqual(messages[0].tools, ['bash', 'read_file'])
+const toolCall = (callId, name, args, seq) => ({
+  type: 'event',
+  event: { type: 'tool/call', seq, time: 1000 + seq, data: { callId, name, arguments: args } },
 })
 
-test('非 message 事件（tool/result、step/start）不进正文', () => {
+const toolResult = (callId, text, seq, isError = false) => ({
+  type: 'event',
+  event: {
+    type: 'tool/result',
+    seq,
+    time: 1000 + seq,
+    data: {
+      message: {
+        role: 'tool',
+        toolCallId: callId,
+        source: { kind: 'tool', callId },
+        content: [{ type: 'text', text }],
+        isError,
+      },
+    },
+  },
+})
+
+test('工具调用挂到前面的 assistant 消息上，结果按 callId 回填', () => {
   const messages = toTranscript([
-    { type: 'event', event: { type: 'tool/call', seq: 3, time: 1, data: { name: 'bash' } } },
-    { type: 'event', event: { type: 'tool/result', seq: 4, time: 2, data: { message: { role: 'tool', content: [{ type: 'text', text: 'x' }] } } } },
-    { type: 'event', event: { type: 'step/start', seq: 5, time: 3, data: {} } },
+    assistantEvent([{ type: 'reasoning', text: '想想' }], 10),
+    toolCall('c1', 'bash', '{"cmd":"ls"}', 11),
+    toolResult('c1', 'file-a\nfile-b', 12),
   ])
-  assert.equal(messages.length, 0)
+  assert.equal(messages.length, 1)
+  assert.equal(messages[0].text, '')
+  assert.equal(messages[0].tools.length, 1)
+  assert.deepEqual(
+    { name: messages[0].tools[0].name, args: messages[0].tools[0].args, isError: messages[0].tools[0].isError },
+    { name: 'bash', args: '{"cmd":"ls"}', isError: false },
+  )
+  assert.match(messages[0].tools[0].result, /file-a/)
+})
+
+test('结果回来之前，工具调用的 result 是 null', () => {
+  const messages = toTranscript([assistantEvent([{ type: 'text', text: '跑一下' }], 1), toolCall('c1', 'bash', '{}', 2)])
+  assert.equal(messages.length, 1)
+  assert.equal(messages[0].tools[0].result, null)
+})
+
+test('孤立的 tool/result（没有对应 call）被忽略', () => {
+  const messages = toTranscript([assistantEvent([{ type: 'text', text: '嗯' }], 1), toolResult('nope', 'x', 2)])
+  assert.equal(messages.length, 1)
+  assert.equal(messages[0].tools.length, 0)
+})
+
+test('没有前置 assistant 时，工具调用单独成一条消息', () => {
+  const messages = toTranscript([toolCall('c1', 'bash', '{}', 5), toolResult('c1', 'ok', 6)])
+  assert.equal(messages.length, 1)
+  assert.equal(messages[0].role, 'assistant')
+  assert.equal(messages[0].text, '')
+  assert.equal(messages[0].tools[0].name, 'bash')
+})
+
+test('工具结果超长截断，错误结果带标记', () => {
+  const messages = toTranscript([assistantEvent([{ type: 'text', text: 'x' }], 1), toolCall('c1', 'bash', '{}', 2), toolResult('c1', 'e'.repeat(30), 3, true)], {
+    resultLimit: 10,
+  })
+  const tool = messages[0].tools[0]
+  assert.equal(tool.isError, true)
+  assert.ok(tool.result.startsWith('eeeeeeeeee'))
+  assert.match(tool.result, /已截断，共 30 字/)
+})
+
+test('过程事件（step/start、job/*）不进正文', () => {
+  const messages = toTranscript([
+    assistantEvent([{ type: 'text', text: '好' }], 1),
+    { type: 'event', event: { type: 'step/start', seq: 2, time: 1, data: {} } },
+    { type: 'event', event: { type: 'job/registered', seq: 3, time: 2, data: {} } },
+  ])
+  assert.equal(messages.length, 1)
+  assert.equal(messages[0].tools.length, 0)
 })
 
 test('超长文本按 textLimit 截断并标注原长', () => {

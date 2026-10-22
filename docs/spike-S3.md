@@ -79,7 +79,9 @@ POST /api/session/page
 
 ## 5. 未做
 
-- **向前翻页**：`session/page` 接受 `beforeSeq`，v0.1 只取最近 N 条，不做「加载更早」。
-- **工具结果展开**：`tool/result` 里有命令输出，先不展示。
+- **向前翻页**：已做。`session/page` 接受 `beforeSeq`，实测严格向前、无重叠。
+- **工具结果展开**：已做。`tool/call` 与 `tool/result` 靠
+  `data.callId` / `data.message.toolCallId` 配对；参数截 400 字、结果截 4000 字，
+  前端用 `<details>` 折叠。实测 30 条消息含 27 个工具调用，全部配到结果，载荷约 34 KB。
 - **本机路径**：`ctx.sessionController` 上同样有 `projections()` / `page()`，形状一致，
-  已按同一套规则接上（未在真实本机会话上单独验证，等 UI 点开本机会话时确认）。
+  已按同一套规则接上，并已在真实本机会话上验证。
