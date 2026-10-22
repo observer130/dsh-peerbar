@@ -94,12 +94,19 @@ try {
   }
   if (await page.$('.koUx-W_sessionRow')) {
     await page.hover('.koUx-W_sessionRow')
-    await page.click('.koUx-W_sessionRow .koUx-W_rowActions button')
+    const hoverButtons = await page.evaluate(
+      () => document.querySelectorAll('.koUx-W_sessionRow .koUx-W_rowActions button').length,
+    )
+    first.hoverButtons = hoverButtons
+    if (hoverButtons < 3) problems.push(`会话行 hover 按钮不足 3 个（实际 ${hoverButtons}）`)
+    await page.click('.koUx-W_sessionRow .koUx-W_rowActions button:last-child')
     await new Promise((resolve) => setTimeout(resolve, 500))
     const menuItems = await menuItemsOf()
     await page.screenshot({ path: path.join(OUT, 'ui-4-session-menu.png') })
     first.menuItems = menuItems
-    if (menuItems.length === 0) problems.push('会话行菜单点开后没有任何菜单项')
+    for (const label of ['置顶会话', '重命名', '分叉会话', '归档会话', '复制 Session ID']) {
+      if (!menuItems.includes(label)) problems.push(`会话菜单缺少「${label}」`)
+    }
     await page.keyboard.press('Escape')
     await new Promise((resolve) => setTimeout(resolve, 200))
   }
@@ -110,7 +117,9 @@ try {
     const items = await menuItemsOf()
     await page.screenshot({ path: path.join(OUT, 'ui-5-workspace-menu.png') })
     first.workspaceMenuItems = items
-    if (items.length === 0) problems.push('工作区行菜单点开后没有任何菜单项')
+    for (const label of ['重命名工作区', '删除工作区']) {
+      if (!items.includes(label)) problems.push(`工作区菜单缺少「${label}」`)
+    }
     await page.keyboard.press('Escape')
     await new Promise((resolve) => setTimeout(resolve, 200))
   }
