@@ -110,6 +110,13 @@ try {
     for (const hint of ['CtrlAltG', 'CtrlAltF', 'CtrlShiftA']) {
       if (!menuItems.some((item) => item.includes(hint))) problems.push(`会话菜单缺少快捷键「${hint}」`)
     }
+    // 指针移进菜单后不应关闭（回归：closeOnPointerLeave 曾导致一移就消失）
+    if (menuItems.length > 0) {
+      await page.hover('[role="menuitem"]')
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      const still = await menuItemsOf()
+      if (still.length < menuItems.length) problems.push('指针移到菜单上后菜单消失了')
+    }
     await page.keyboard.press('Escape')
     await new Promise((resolve) => setTimeout(resolve, 200))
   }
