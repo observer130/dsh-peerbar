@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { clampLimit, toTranscript } from '../lib/transcript.js'
+import { clampLimit, readTranscriptFrom, toTranscript } from '../lib/transcript.js'
 
 const userEvent = (text, seq = 1) => ({
   type: 'event',
@@ -71,4 +71,32 @@ test('clampLimit 收口到 1..50，非法值用默认', () => {
   assert.equal(clampLimit('abc'), 20)
   assert.equal(clampLimit(999), 50)
   assert.equal(clampLimit(-5), 20)
+})
+
+test('readTranscriptFrom 把 signal 传给 controller（少传会炸）', async () => {
+  const seen = []
+  const controller = {
+    async projections(request, signal) {
+      seen.push(['projections', typeof signal, signal !== undefined])
+      signal.throwIfAborted()
+      assert.deepEqual(request, { sessionId: 's1' })
+      return { asOfSeq: 7 }
+    },
+    async page(request, signal) {
+      seen.push(['page', typeof signal])
+      signal.throwIfAborted()
+      assert.equal(request.throughSeq, 7)
+      assert.equal(request.maxMessages, 5)
+      assert.deepEqual(request.address, { kind: 'session', sessionId: 's1' })
+      return { records: [userEvent('hi', 1)], hasMore: false }
+    },
+  }
+  const result = await readTranscriptFrom(controller, 's1', 5)
+  assert.deepEqual(seen, [
+    ['projections', 'object', true],
+    ['page', 'object'],
+  ])
+  assert.equal(result.messages.length, 1)
+  assert.equal(result.messages[0].text, 'hi')
+  assert.equal(result.hasMore, false)
 })
