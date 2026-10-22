@@ -119,23 +119,48 @@ export function apply(ctx) {
 }
 ```
 
-## Git
+## Git 与合并闸门（2026-10-22 重写）
 
-- 从 `master` 拉分支：`feat/` `fix/` `spike/` `docs/` `chore/`，一个分支做一件事；合回用 `git merge --no-ff <branch>`，然后删分支。
-- 提交信息：Conventional Commits + 中文主题。
+**教训**：上一轮每改一两个 commit 就 `--no-ff` 合进 `master`，功能还是错的，导致 master 不可用、
+用户被迫反复验收。以下规则不可协商：
 
-  ```
-  feat(probe): 按 TLS 错误码区分 tls-error 与 unreachable
-  ```
+1. **`master` 只接受「已验证可用」的状态**。合并 = 一次发布，不是一次提交同步。
+2. 开工先拉**长生命周期功能分支**（`feat/<feature>`），在整个功能完成前**不合回 master**，
+   中途随便 commit（`wip:` 前缀也可以）。
+3. 合回 master 前必须同时满足：
+   - `node --test test/*.test.js` 全绿；
+   - `node --check lib/*.js` 通过；
+   - **`scripts/ui-check.mjs` 全绿**（会自动登录本地实例、点开远端会话、截图、收集 console error）；
+   - 我**亲自看过截图**，并逐条对照 `docs/功能复述.md` 的交互表；
+   - 宿主半改动已重启实例验证，客户端改动已刷新验证。
+4. 只要功能还有一项不对，就**不合**；需要保留进度就继续在该分支上 commit。
+5. 已经合错的，**回滚那次 merge**，不要「在新 commit 里顺手修」把 master 当成工作区。
+6. 提交信息：Conventional Commits + 中文主题，正文必须写「怎么验证的」；验证方式写不出来的提交，
+   说明还没做完，留在功能分支上。
 
-  类型用 `feat|fix|docs|refactor|perf|test|chore|spike`，scope 用 `host|client|sidebar|probe|proxy|config|docs|deps`。正文写清为什么改、怎么验证的；一个提交只做一件事。
+## 自检闭环（不许再让用户当第一验收人）
+
+```sh
+# 1) 起一个隔离 profile 的 web 实例（复制 desktop profile，端口 3100）
+scripts/dev-server.sh > .workbuddy/tmp/pb-web.log 2>&1 &
+
+# 2) 自动验收：登录 → 截图侧栏 → 展开远端组 → 点开会话 → 再截图 → 断言
+node scripts/ui-check.mjs
+```
+
+- 产物在 `.workbuddy/tmp/`：`ui-1-sidebar.png`、`ui-2-remote-expanded.png`、
+  `ui-3-remote-session.png`、`ui-check.json`。
+- 断言包含：工作区行 / 会话行数量、会话行缩进、远端标签、正文消息数、console error 必须为 0。
+- **改完必须自己看图**（Read 图片），确认视觉与原生一致，再决定下一步。
+- 宿主半改动要重启 `dev-server.sh`；客户端改动刷新页面即可（脚本每次新开页面）。
 
 ## 边界
 
 **总是**
 
-- 改宿主半后重启 DSH Desktop 再验证；改客户端半后重载窗口并看 console。
-- 提交前跑 `node --check`。
+- 改完先跑自检闭环（见上）：`node --check`、`node --test`、`node scripts/ui-check.mjs`，并**亲眼看截图**；
+  自检不过不向用户汇报「做完了」。
+- 用户装的那份 DSH Desktop 只在**功能整体验证通过后**才让他重启；在此之前用 `dev-server.sh` 的隔离实例自测。
 - 新核实的 dsh 契约补进 `docs/插件开发规范.md`，标【已核实】并给出证据位置（文件:行号）。
 
 **先问**
