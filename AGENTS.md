@@ -4,11 +4,11 @@
 
 ## 项目速览
 
-- **是什么**：一个 DeepSeek Harness（dsh）插件。在本机 dsh 里聚合多台远端 dsh 的工作区与会话，用 Host 标签区分来源。
+- **是什么**：一个 DeepSeek Harness（dsh）插件。在本机登记多台远端 dsh，管理访问凭据（启动令牌换 cookie）与在线状态。**v0.1 不做聚合视图**（2026-10-22 范围调整），界面只有「设置 → 多机侧栏」。
 - **技术栈**：纯 JavaScript ESM，**无构建步骤**，目标零第三方依赖。宿主半跑在 Node，客户端半是浏览器 `__ModuleLoader__` bundle。
 - **目标宿主**：dsh `0.2.1-rc.2`，profile `~/.dsh/profiles/desktop`。
-- **当前阶段**：M0 之前，仓库里还没有 `package.json`。先建骨架，再按 `docs/需求交接.md` §16 的 M1–M3 推进。
-- **两半结构**：`lib/index.js` 宿主半（注册路由、探活、拉取远端快照、缓存）；`lib/client.js` 客户端半（注册 slot、渲染 UI）。两半之间只通过同源 HTTP 通信。
+- **当前阶段**：M0–M1 已完成并在真实实例上验收；M2/M3 的聚合视图部分按范围调整取消，数据层（探活、快照、正文读取）保留但未暴露 UI。
+- **两半结构**：`lib/index.js` 宿主半（注册路由、探活、拉取远端快照、缓存）；`lib/client.js` 客户端半（只注册 `settings.section`）。两半之间只通过同源 HTTP 通信。
 
 ## 架构不变量
 
