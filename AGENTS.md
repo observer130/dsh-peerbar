@@ -4,15 +4,19 @@
 
 ## 项目速览
 
-- **是什么**：一个 DeepSeek Harness（dsh）插件。在本机登记多台远端 dsh，管理访问凭据（启动令牌换 cookie）与在线状态。**v0.1 不做聚合视图**（2026-10-22 范围调整），界面只有「设置 → 多机侧栏」。
+- **是什么**：一个 DeepSeek Harness（dsh）插件。**在原生侧栏那一列里**把本机工作区/会话与多台远端（nv50 / m50）混排成一棵树；点远端会话在原生中栏读只读正文。形态见 `docs/实现方案-A.md`（ADR-001），需求以 `docs/功能复述.md` 为准。
 - **技术栈**：纯 JavaScript ESM，**无构建步骤**，目标零第三方依赖。宿主半跑在 Node，客户端半是浏览器 `__ModuleLoader__` bundle。
 - **目标宿主**：dsh `0.2.1-rc.2`，profile `~/.dsh/profiles/desktop`。
-- **当前阶段**：M0–M1 已完成并在真实实例上验收；M2/M3 的聚合视图部分按范围调整取消，数据层（探活、快照、正文读取）保留但未暴露 UI。
-- **两半结构**：`lib/index.js` 宿主半（注册路由、探活、拉取远端快照、缓存）；`lib/client.js` 客户端半（只注册 `settings.section`）。两半之间只通过同源 HTTP 通信。
+- **当前阶段**：宿主半与数据层已完成并在真机验证；客户端半按 ADR-001 重做（T1 接管 `sidebar.workspaces`、T2 远端并入、T3 正文面板、T4 容错、T5 交互），任务卡见 `docs/开发计划.md`。
+- **两半结构**：`lib/index.js` 宿主半（注册路由、探活、拉取远端快照、缓存）；`lib/client.js` 客户端半（注册 `sidebar.workspaces`、`main` 面板 `peerbar-session`、`settings.section`）。两半之间只通过同源 HTTP 通信。
 
 ## 架构不变量
 
 这几条是设计前提，不是可调偏好：
+
+- **形态是硬约束**：远端工作区/会话必须出现在原生侧栏那棵树里（`sidebar.workspaces` 座位）。
+  **禁止**用「侧栏图标 + 中栏整页」、右侧 dock、全屏浮层来替代——上一版就是这么翻车的。
+- **本机数据不另拉一份**：用 slot 的 `useWorkspaces` / `useSessions` hooks，和官方树同源，避免同一会话两行。
 
 - **浏览器不直连远端**。所有跨机请求由宿主半发起（远端 cookie 是 host-only + `SameSite=Strict`，浏览器跨 origin 拿不到）。
 - **远端只提供数据，不提供 UI**。不加载远端插件 bundle，不把远端 slot 接进来。
