@@ -53,6 +53,9 @@ curl -i -X POST -H 'Origin: http://evil' "http://127.0.0.1:<port>/dsh-peerbar/ap
 # 单测（纯函数：守卫 / 身份 / 信封 / 退避，不起 dsh）
 node --test test/*.test.js
 
+# 安全验收（打真实实例；不传参数会自动找端口）
+scripts/security-check.sh http://127.0.0.1:<port>
+
 # 打包（本机无 pnpm）
 npm pack
 ```
