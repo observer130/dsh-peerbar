@@ -8,7 +8,7 @@
 - **技术栈**：纯 JavaScript ESM，**无构建步骤**，目标零第三方依赖。宿主半跑在 Node，客户端半是浏览器 `__ModuleLoader__` bundle。
 - **目标宿主**：dsh `0.2.1-rc.2`，profile `~/.dsh/profiles/desktop`。
 - **当前阶段**：M0 之前，仓库里还没有 `package.json`。先建骨架，再按 `docs/需求交接.md` §16 的 M1–M3 推进。
-- **两半结构**：`lib/index.js` 宿主半（注册路由、探活、代理、缓存）；`lib/client.js` 客户端半（注册 slot、渲染 UI）。两半之间只通过同源 HTTP 通信。
+- **两半结构**：`lib/index.js` 宿主半（注册路由、探活、拉取远端快照、缓存）；`lib/client.js` 客户端半（注册 slot、渲染 UI）。两半之间只通过同源 HTTP 通信。
 
 ## 架构不变量
 
@@ -34,7 +34,8 @@
 
 ```sh
 # 语法自检（无构建、无 tsc，语法错只会在加载时炸）
-node --check lib/index.js && node --check lib/client.js
+# 语法自检（无构建、无 tsc，语法错只会在加载时炸）
+for f in lib/*.js; do node --check "$f" || break; done
 
 # 客户端代码变化后重载窗口；宿主代码变化后重启 DSH Desktop
 
@@ -49,18 +50,29 @@ curl -i "http://127.0.0.1:<port>/dsh-peerbar/api/state"
 curl -i -X POST -H 'Origin: http://evil' "http://127.0.0.1:<port>/dsh-peerbar/api/hosts"   # 期望 403
 ```
 
-M0 建好 `package.json` 后在此补：`node --test test/`（自检）与 `npm pack`（打包验证，本机无 pnpm）。
+# 单测（纯函数：守卫 / 身份 / 信封 / 退避，不起 dsh）
+node --test test/*.test.js
+
+# 打包（本机无 pnpm）
+npm pack
+```
+
+M0 已落地以上命令；`npm pack` 出的 tgz 可直接在桌面版插件页安装。
 
 ## 目录
 
 ```
-lib/index.js    宿主半入口：路由装配、探活调度
-lib/hosts.js    Host 注册表 + 配置读写（~/.dsh/dsh-peerbar.json，0600）
-lib/probe.js    探活与错误分类
-lib/proxy.js    白名单代理 + cookie jar
-lib/codes.js    错误码，前后端共用
-lib/client.js   客户端半：slot 注册与 UI
-docs/           需求、插件开发规范、spike 结论
+lib/index.js     宿主半入口：config 校验、路由装配、生命周期
+lib/config.js    注册表与缓存读写（0600、原子替换）
+lib/guard.js     回环 + 同源栅栏（P0-5 的地基）
+lib/identity.js  origin 归一化、hostId、虚拟 ID、cwd → 工作区
+lib/remote.js    令牌换 cookie、RPC 信封、session/list、错误分类
+lib/probe.js     探活状态机与退避
+lib/peers.js     每 Host 的快照编排、调度与缓存
+lib/codes.js     错误码，前后端共用
+lib/client.js    客户端半：panellist / main / settings.section
+test/            node:test 单测
+docs/            需求、插件开发规范、开发计划、spike 结论
 ```
 
 新增文件前先想归属；`lib/index.js` 只做装配，不堆业务。
