@@ -30,7 +30,12 @@ function readBase() {
   return match[0]
 }
 
+// 已知噪声：顶替 single slot 时，官方那条注册会报同优先级冲突；我们这条后注册、渲染生效。
+// 这是「遮蔽成功」的副作用，不影响功能，但记录在 ui-check.json 里备查。
+const KNOWN_NOISE = [/single slot "sidebar\.workspaces" already has a registration at priority/]
+
 const problems = []
+const warnings = []
 const base = readBase()
 const browser = await puppeteer.launch({
   executablePath: '/usr/bin/google-chrome-stable',
@@ -75,53 +80,90 @@ try {
     problems.push(`会话行没有缩进（padding-left=${first.sessionPaddingLeft}）`)
   }
 
-  // 展开第一个远端组，再点其中第一条会话
+  // 展开第一个远端组，最多试 4 条会话，取"有真人发言/富文本"的那条截图
   const tagHandle = await page.$('.dshp-tag')
   if (tagHandle) {
     await tagHandle.evaluate((node) => node.closest('.koUx-W_projectRow').click())
     await new Promise((resolve) => setTimeout(resolve, 600))
     await page.screenshot({ path: path.join(OUT, 'ui-2-remote-expanded.png') })
 
-    const clicked = await page.evaluate(() => {
-      const tag = document.querySelector('.dshp-tag')
-      const group = tag?.closest('[role="treeitem"]')
-      const row = group?.querySelector('.koUx-W_sessionRow')
-      if (!row) return false
-      row.click()
-      return true
+    const rows = await page.evaluate(() => {
+      const group = document.querySelector('.dshp-tag')?.closest('[role="treeitem"]')
+      return group ? group.querySelectorAll('.koUx-W_sessionRow').length : 0
     })
-    if (!clicked) {
-      problems.push('远端组展开后没有会话行可点')
-    } else {
-      await page.waitForSelector('.dshp-panel', { timeout: 10000 })
-      await new Promise((resolve) => setTimeout(resolve, 2000))
-      await page.screenshot({ path: path.join(OUT, 'ui-3-remote-session.png'), fullPage: false })
+    if (rows === 0) problems.push('远端组展开后没有会话行可点')
 
-      const panel = await page.evaluate(() => {
-        const tools = document.querySelector('.dshp-tools')
-        const first = document.querySelector('.dshp-tool')
-        const rect = first?.getBoundingClientRect()
-        return {
-          messages: document.querySelectorAll('.dshp-msg').length,
-          userBubbles: document.querySelectorAll('.vq-vBq_userRow').length,
-          toolChips: document.querySelectorAll('.dshp-tool').length,
-          toolsDisplay: tools ? getComputedStyle(tools).display : null,
-          firstToolWidth: rect ? Math.round(rect.width) : null,
-          firstToolDisplay: first ? getComputedStyle(first).display : null,
-          panelWidth: document.querySelector('.dshp-panel-body')?.getBoundingClientRect().width ?? 0,
-          preview: (document.querySelector('.dshp-panel-body')?.innerText ?? '').slice(0, 160),
+    let panel = { messages: 0, userBubbles: 0, toolChips: 0, richContent: 0, firstToolWidth: null, preview: '' }
+    const groupCount = await page.evaluate(() => document.querySelectorAll('.dshp-tag').length)
+    let foundBubble = false
+    for (let group = 0; group < Math.min(groupCount, 3) && !foundBubble; group += 1) {
+      await page.evaluate((index) => {
+        const tags = document.querySelectorAll('.dshp-tag')
+        tags[index]?.closest('.koUx-W_projectRow')?.click()
+      }, group)
+      await new Promise((resolve) => setTimeout(resolve, 400))
+      const rows = await page.evaluate((index) => {
+        const tags = document.querySelectorAll('.dshp-tag')
+        const holder = tags[index]?.closest('[role="treeitem"]')
+        return holder ? holder.querySelectorAll('.koUx-W_sessionRow').length : 0
+      }, group)
+      for (let index = 0; index < Math.min(rows, 3); index += 1) {
+        await page.evaluate(
+          ([groupIndex, rowIndex]) => {
+            const tags = document.querySelectorAll('.dshp-tag')
+            const holder = tags[groupIndex]?.closest('[role="treeitem"]')
+            holder?.querySelectorAll('.koUx-W_sessionRow')[rowIndex]?.click()
+          },
+          [group, index],
+        )
+        await page.waitForSelector('.dshp-panel', { timeout: 8000 })
+        await new Promise((resolve) => setTimeout(resolve, 1200))
+        const stats = await page.evaluate(() => {
+          const first = document.querySelector('.dshp-tool')
+          const rect = first?.getBoundingClientRect()
+          const body = document.querySelector('.dshp-panel-body')
+          return {
+            messages: document.querySelectorAll('.dshp-msg').length,
+            userBubbles: document.querySelectorAll('.vq-vBq_userRow').length,
+            toolChips: document.querySelectorAll('.dshp-tool').length,
+            richContent: body ? body.querySelectorAll('table, pre, h1, h2, h3, ul, ol, blockquote').length : 0,
+            firstToolWidth: rect ? Math.round(rect.width) : null,
+            preview: (body?.innerText ?? '').slice(0, 120),
+          }
+        })
+        if (stats.userBubbles > panel.userBubbles || stats.richContent > panel.richContent || stats.messages > panel.messages) {
+          panel = stats
         }
-      })
-      if (panel.messages === 0 && panel.userBubbles === 0) problems.push('正文面板没有任何消息')
-      Object.assign(first, { panel })
+        if (stats.userBubbles > 0) {
+          foundBubble = true
+          break
+        }
+      }
+    }
+    await page.screenshot({ path: path.join(OUT, 'ui-3-remote-session.png'), fullPage: false })
+    first.panel = panel
+
+    if (panel.messages === 0 && panel.userBubbles === 0) problems.push('正文面板没有任何消息')
+    if (panel.firstToolWidth && panel.firstToolWidth > 200) {
+      problems.push(`工具调用没有收成胶囊（首个体宽 ${panel.firstToolWidth}px）`)
+    }
+    if (!foundBubble) warnings.push('抽样到的会话里没有真人发言，用户气泡样式未被覆盖')
+    if (panel.richContent === 0 && panel.messages > 0) {
+      warnings.push('抽样会话没有表格/代码块/列表，富文本渲染未被覆盖')
     }
   }
 
-  const result = { base, ...first, consoleErrors }
+  const knownWarnings = consoleErrors.filter((text) => KNOWN_NOISE.some((pattern) => pattern.test(text)))
+  const realErrors = consoleErrors.filter((text) => !knownWarnings.includes(text))
+  const result = { base, ...first, consoleErrors: realErrors, knownWarnings }
   fs.writeFileSync(path.join(OUT, 'ui-check.json'), JSON.stringify(result, null, 2))
   console.log(JSON.stringify(result, null, 2))
-  if (consoleErrors.length) problems.push(`页面报错 ${consoleErrors.length} 条`)
+  if (realErrors.length) problems.push(`页面报错 ${realErrors.length} 条`)
 
+  if (warnings.length) {
+    console.log('\n提醒：')
+    for (const warning of warnings) console.log(' -', warning)
+  }
   if (problems.length) {
     console.error('\n断言失败：')
     for (const problem of problems) console.error(' -', problem)
