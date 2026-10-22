@@ -87,6 +87,20 @@ initializeDefault, follow
 
 → v0.1 的「工作区」只能按 `cwd` 分组合成（组名取目录 basename），并在 UI 上标注这是路径分组而非远端工作区记录。
 
+### 2.5 cookie 跨远端重启（2026-10-22 补测）
+
+nv50 的 dsh 重启后，启动令牌失效（`/connect` 返回 `auth-required`），但本机已保存的
+cookie 仍能正常 `session/list` 与 `session/page`：
+
+```
+exchange: false auth-required 令牌无效或已过期
+用缓存 cookie 拉列表: ok 26 条
+正文: ok 3 条
+```
+
+→ **cookie 跨进程重启有效**，与「签名密钥持久化」的文档结论一致。日常不需要在远端
+每次重启后重贴令牌；只有 cookie 过期（30 天）或远端凭据被清时才需要。
+
 ## 3. 推论
 
 1. **不需要 provider 模式**：远端不用装任何东西，本机持有 cookie 即可读。
@@ -96,7 +110,5 @@ initializeDefault, follow
 
 ## 4. 未验证
 
-- cookie 是否真能跨远端进程重启存活（只读了文档，没有重启 nv50 验证）。
-- `cursor` 分页语义（26 条一次返回，v0.1 可忽略）。
-- `session/projections` 是否 unary、能否拉正文（P1 的前置，另开 spike-S3）。
+- `cursor` 分页语义（26 条一次返回，v0.1 可忽略；`session/page` 的 `beforeSeq` 已验证）。
 - 远端 dsh 若绑在 `127.0.0.1` 或走域名 + 反代，cookie 的 audience 是否仍匹配。
