@@ -132,7 +132,7 @@ try {
     await page.screenshot({ path: path.join(OUT, 'ui-2-remote-expanded.png') })
 
     const rows = await page.evaluate(() => {
-      const group = document.querySelector('.dshp-tag')?.closest('[role="treeitem"]')
+      const group = document.querySelector('.dshp-tag')?.closest('.koUx-W_projectRow')?.parentElement
       return group ? group.querySelectorAll('.koUx-W_sessionRow').length : 0
     })
     if (rows === 0) problems.push('远端组展开后没有会话行可点')
@@ -148,14 +148,14 @@ try {
       await new Promise((resolve) => setTimeout(resolve, 400))
       const rows = await page.evaluate((index) => {
         const tags = document.querySelectorAll('.dshp-tag')
-        const holder = tags[index]?.closest('[role="treeitem"]')
+        const holder = tags[index]?.closest('.koUx-W_projectRow')?.parentElement
         return holder ? holder.querySelectorAll('.koUx-W_sessionRow').length : 0
       }, group)
       for (let index = 0; index < Math.min(rows, 3); index += 1) {
         await page.evaluate(
           ([groupIndex, rowIndex]) => {
             const tags = document.querySelectorAll('.dshp-tag')
-            const holder = tags[groupIndex]?.closest('[role="treeitem"]')
+            const holder = tags[groupIndex]?.closest('.koUx-W_projectRow')?.parentElement
             holder?.querySelectorAll('.koUx-W_sessionRow')[rowIndex]?.click()
           },
           [group, index],
