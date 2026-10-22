@@ -105,11 +105,36 @@ try {
     await page.screenshot({ path: path.join(OUT, 'ui-4-session-menu.png') })
     first.menuItems = menuItems
     for (const label of ['置顶会话', '重命名', '分叉会话', '归档会话', '复制 Session ID']) {
-      if (!menuItems.includes(label)) problems.push(`会话菜单缺少「${label}」`)
+      if (!menuItems.some((item) => item.startsWith(label))) problems.push(`会话菜单缺少「${label}」`)
+    }
+    for (const hint of ['CtrlAltG', 'CtrlAltF', 'CtrlShiftA']) {
+      if (!menuItems.some((item) => item.includes(hint))) problems.push(`会话菜单缺少快捷键「${hint}」`)
     }
     await page.keyboard.press('Escape')
     await new Promise((resolve) => setTimeout(resolve, 200))
   }
+  // 视图选项菜单（S5）
+  const hasViewButton = await page.evaluate(() => {
+    const buttons = [...document.querySelectorAll('.hP3ldq_iconButton')]
+    const button = buttons.find((node) => (node.title || '').includes('视图'))
+    if (!button) return false
+    button.click()
+    return true
+  })
+  if (hasViewButton) {
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    const items = await menuItemsOf()
+    await page.screenshot({ path: path.join(OUT, 'ui-6-view-options.png') })
+    first.viewOptionItems = items
+    for (const label of ['按工作区', '单列表', '手动排序', '最近更新', '隐藏已归档', '全部对话', '仅显示已归档']) {
+      if (!items.some((item) => item.startsWith(label))) problems.push(`视图选项缺少「${label}」`)
+    }
+    await page.keyboard.press('Escape')
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  } else {
+    problems.push('头部没有视图选项按钮')
+  }
+
   if (await page.$('.koUx-W_projectRow')) {
     await page.hover('.koUx-W_projectRow')
     await page.click('.koUx-W_projectRow .koUx-W_rowActions button:last-child')
@@ -118,7 +143,7 @@ try {
     await page.screenshot({ path: path.join(OUT, 'ui-5-workspace-menu.png') })
     first.workspaceMenuItems = items
     for (const label of ['重命名工作区', '删除工作区']) {
-      if (!items.includes(label)) problems.push(`工作区菜单缺少「${label}」`)
+      if (!items.some((item) => item.startsWith(label))) problems.push(`工作区菜单缺少「${label}」`)
     }
     await page.keyboard.press('Escape')
     await new Promise((resolve) => setTimeout(resolve, 200))
