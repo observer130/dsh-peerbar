@@ -71,10 +71,53 @@ try {
       sessionRows: document.querySelectorAll('.koUx-W_sessionRow').length,
       remoteTags: [...document.querySelectorAll('.dshp-tag')].map((node) => node.textContent),
       firstGroups: rows.slice(0, 5).map((node) => node.innerText.replace(/\s+/g, ' ').trim()),
+      // 原生：blank 行标题是「新会话」，未命名回退是「未命名」
       blankRows: [...document.querySelectorAll('.koUx-W_sessionRow .koUx-W_title')].filter(
-        (node) => node.textContent.trim() === '未命名会话',
+        (node) => node.textContent.trim() === '新会话',
+      ).length,
+      untitledRows: [...document.querySelectorAll('.koUx-W_sessionRow .koUx-W_title')].filter(
+        (node) => node.textContent.trim() === '未命名',
       ).length,
       menuButtons: document.querySelectorAll('.koUx-W_rowActions button').length,
+      // 原生行内 ⋯ 只给 aria，不给 title tooltip
+      sessionMenuAria: document.querySelector('.koUx-W_sessionRow .koUx-W_rowActions button')?.getAttribute('aria-label') ?? null,
+      projectMenuAria: document.querySelector('.koUx-W_projectRow .koUx-W_rowActions button')?.getAttribute('aria-label') ?? null,
+      sessionMenuTitle: document.querySelector('.koUx-W_sessionRow .koUx-W_rowActions button')?.getAttribute('title') ?? null,
+      // 原生分组标题栏：36px 高、标题 14px、搜索按钮 28×28
+      headerHeight: (() => {
+        const el = document.querySelector('.hP3ldq_sectionHeader')
+        return el ? Math.round(el.getBoundingClientRect().height) : null
+      })(),
+      sectionLabelSize: (() => {
+        const el = document.querySelector('.hP3ldq_sectionLabel')
+        return el ? getComputedStyle(el).fontSize : null
+      })(),
+      searchButton: (() => {
+        const el = document.querySelector('.hP3ldq_searchButton')
+        if (!el) return null
+        const r = el.getBoundingClientRect()
+        return `${Math.round(r.width)}x${Math.round(r.height)}`
+      })(),
+      folderActive: document.querySelectorAll('.koUx-W_projectRow .koUx-W_folderActive').length,
+      selectedRowActiveFolder: (() => {
+        const selected = document.querySelector('.koUx-W_sessionRow.koUx-W_selected')
+        if (!selected) return null
+        const group = selected.parentElement?.parentElement
+        return Boolean(group?.querySelector('.koUx-W_projectRow .koUx-W_folderActive'))
+      })(),
+      overflowLabel: document.querySelector('.hP3ldq_sessionOverflowButton')?.textContent?.trim() ?? null,
+      // 原生 idle 行走 sidebar.session.row.leading 空槽，不画状态点
+      idleDots: document.querySelectorAll('.koUx-W_sessionRow .koUx-W_slot [data-state="idle"]').length,
+      idleSlotWidth: (() => {
+        const slot = document.querySelector('.koUx-W_sessionRow .koUx-W_slot')
+        return slot ? Math.round(slot.getBoundingClientRect().width) : null
+      })(),
+      // 原生行几何：padding-left 8px（顶层工作区 depth=0），标题距行左 8+16+4=28
+      sessionTitleOffset: (() => {
+        if (!session) return null
+        const title = session.querySelector('.koUx-W_title')
+        return title ? Math.round(title.getBoundingClientRect().left - session.getBoundingClientRect().left) : null
+      })(),
       sessionPaddingLeft: session ? getComputedStyle(session).paddingLeft : null,
       treeHeight: tree ? tree.getBoundingClientRect().height : 0,
     }
@@ -85,10 +128,47 @@ try {
   if (first.projectRows === 0) problems.push('侧栏没有任何工作区行（.koUx-W_projectRow 为 0）')
   if (first.sessionRows === 0) problems.push('侧栏没有任何会话行（.koUx-W_sessionRow 为 0）')
   if (first.remoteTags.length === 0) problems.push('侧栏没有远端 Host 标签（.dshp-tag）')
-  if (first.sessionPaddingLeft && Number.parseFloat(first.sessionPaddingLeft) < 20) {
-    problems.push(`会话行没有缩进（padding-left=${first.sessionPaddingLeft}）`)
+  // 原生 `--dsh-workspace-indent` 是 depth*12，顶层工作区下的会话是 0 → padding-left 8px，
+  // 标题距行左 8 + slot 16 + margin 4 = 28。
+  if (first.sessionPaddingLeft && first.sessionPaddingLeft !== '8px') {
+    problems.push(`会话行 padding-left 应为 8px（原生顶层 depth=0），实际 ${first.sessionPaddingLeft}`)
+  }
+  if (first.sessionTitleOffset !== null && first.sessionTitleOffset !== 28) {
+    problems.push(`会话标题距行左应为 28px（原生 8+16+4），实际 ${first.sessionTitleOffset}px`)
   }
   if (first.menuButtons === 0) problems.push('行内没有任何菜单按钮（.koUx-W_rowActions button 为 0）')
+  // 原生 blank 行只显示“当前选中”的那一条
+  if (first.blankRows > 1) problems.push(`blank 行最多 1 条（原生只显示当前选中的），实际 ${first.blankRows}`)
+  // aria 文案与原生一致：会话“名”的操作 / 工作区“名”的操作；且不挂 title
+  if (first.sessionMenuAria && !/^会话“.+”的操作$/.test(first.sessionMenuAria)) {
+    problems.push(`会话行 ⋯ 的 aria 应为「会话“名”的操作」，实际「${first.sessionMenuAria}」`)
+  }
+  if (first.projectMenuAria && !/^工作区“.+”的操作$/.test(first.projectMenuAria)) {
+    problems.push(`工作区行 ⋯ 的 aria 应为「工作区“名”的操作」，实际「${first.projectMenuAria}」`)
+  }
+  if (first.sessionMenuTitle !== null) problems.push('会话行 ⋯ 不应挂 title tooltip（原生只有 aria）')
+  // 同一时刻只应有一个“当前工作区”，且它必须包含选中的会话
+  if (first.folderActive > 1) problems.push(`当前工作区高亮最多 1 个，实际 ${first.folderActive}`)
+  if (first.selectedRowActiveFolder === false) {
+    problems.push('选中的会话所在工作区的文件夹没有高亮（koUx-W_folderActive）')
+  }
+  // 标题栏几何对齐原生（36px / 14px / 28×28）
+  if (first.headerHeight !== null && first.headerHeight !== 36) {
+    problems.push(`分组标题栏高度应为 36px（实际 ${first.headerHeight}）`)
+  }
+  if (first.sectionLabelSize && first.sectionLabelSize !== '14px') {
+    problems.push(`「工作区」标题字号应为 14px（实际 ${first.sectionLabelSize}）`)
+  }
+  if (first.searchButton && first.searchButton !== '28x28') {
+    problems.push(`搜索按钮应为 28×28（实际 ${first.searchButton}）`)
+  }
+  if (first.idleDots > 0) problems.push(`idle 行不该画状态点（实际 ${first.idleDots} 个），原生只有在途/完成态才画`)
+  if (first.idleSlotWidth !== null && first.idleSlotWidth !== 16) {
+    problems.push(`不画点后 slot 仍应占 16px（实际 ${first.idleSlotWidth}px）`)
+  }
+  if (first.overflowLabel && !/^展开其余 \d+ 个会话$/.test(first.overflowLabel)) {
+    problems.push(`溢出按钮文案应为「展开其余 N 个会话」（实际「${first.overflowLabel}」）`)
+  }
 
   // 行菜单：先 hover 出 ⋯，再点开，确认菜单项与定位
   const menuItemsOf = async () => {
@@ -104,6 +184,47 @@ try {
     )
     first.hoverButtons = hoverButtons
     if (hoverButtons < 3) problems.push(`会话行 hover 按钮不足 3 个（实际 ${hoverButtons}）`)
+    // 图标度量：原生会话行是 16×16 按钮 + 14px 图标 + 15px 间距
+    // （ui-workspace `ArchiveSessionRowButton` / `PinSessionRowButton` 与 Rows.module.css）。
+    // 归档图标的 artwork 默认 size=20，不显式传 14 会被 16px 按钮压成 16×20、纵向拉长。
+    const iconMetrics = await page.evaluate(() => {
+      const row = document.querySelector('.koUx-W_sessionRow')
+      const actions = row?.querySelector('.koUx-W_rowActions')
+      if (!actions) return null
+      return {
+        gap: getComputedStyle(actions).gap,
+        items: [...actions.querySelectorAll('button')].map((button) => {
+          const box = button.getBoundingClientRect()
+          const svg = button.querySelector('svg')?.getBoundingClientRect()
+          return {
+            label: button.getAttribute('aria-label') || button.title || '',
+            button: [Math.round(box.width), Math.round(box.height)],
+            svg: svg ? [Math.round(svg.width), Math.round(svg.height)] : null,
+          }
+        }),
+      }
+    })
+    first.iconMetrics = iconMetrics
+    if (!iconMetrics) {
+      problems.push('会话行没有行操作区（.koUx-W_rowActions）')
+    } else {
+      if (iconMetrics.gap !== '15px') problems.push(`行操作区间距应为 15px（实际 ${iconMetrics.gap}）`)
+      for (const item of iconMetrics.items) {
+        if (item.button[0] !== 16 || item.button[1] !== 16) {
+          problems.push(`「${item.label}」按钮应为 16×16（实际 ${item.button.join('×')}）`)
+        }
+        if (!item.svg) continue
+        if (item.svg[0] !== item.svg[1]) {
+          problems.push(`「${item.label}」图标比例失真（${item.svg.join('×')}）`)
+        }
+        if (![14, 16].includes(item.svg[0])) {
+          problems.push(`「${item.label}」图标尺寸应为 14 或 16（实际 ${item.svg[0]}）`)
+        }
+        if (/归档|置顶/.test(item.label) && item.svg[0] !== 14) {
+          problems.push(`「${item.label}」图标应与原生一致为 14px（实际 ${item.svg[0]}）`)
+        }
+      }
+    }
     await page.click('.koUx-W_sessionRow .koUx-W_rowActions button:last-child')
     await new Promise((resolve) => setTimeout(resolve, 500))
     const menuItems = await menuItemsOf()
@@ -141,6 +262,12 @@ try {
     for (const label of ['按工作区', '单列表', '手动排序', '最近更新', '隐藏已归档', '全部对话', '仅显示已归档']) {
       if (!items.some((item) => item.startsWith(label))) problems.push(`视图选项缺少「${label}」`)
     }
+    // 分组/排序/筛选是菜单里的 label 行（不是 menuitem），用整段文本核对
+    const menuLabels = await page.evaluate(() => document.querySelector('[role="menu"]')?.innerText ?? '')
+    first.viewOptionLabels = menuLabels.replace(/\s+/g, ' ').slice(0, 160)
+    for (const label of ['分组方式', '排序方式', '筛选会话']) {
+      if (!menuLabels.includes(label)) problems.push(`视图选项缺少分组标题「${label}」`)
+    }
     await page.keyboard.press('Escape')
     await new Promise((resolve) => setTimeout(resolve, 200))
   } else {
@@ -154,33 +281,117 @@ try {
     const items = await menuItemsOf()
     await page.screenshot({ path: path.join(OUT, 'ui-5-workspace-menu.png') })
     first.workspaceMenuItems = items
-    for (const label of ['重命名工作区', '删除工作区']) {
+    for (const label of ['重命名', '删除工作区']) {
       if (!items.some((item) => item.startsWith(label))) problems.push(`工作区菜单缺少「${label}」`)
+    }
+    // 原生菜单项是「重命名」；「重命名工作区」只出现在对话框标题里
+    if (items.some((item) => item.trim() === '重命名工作区')) {
+      problems.push('工作区菜单的改名项应为「重命名」，不该带「工作区」')
     }
     await page.keyboard.press('Escape')
     await new Promise((resolve) => setTimeout(resolve, 200))
   }
 
-  // 展开第一个远端组，最多试 4 条会话，取"有真人发言/富文本"的那条截图
-  const tagHandle = await page.$('.dshp-tag')
-  if (tagHandle) {
-    await tagHandle.evaluate((node) => node.closest('.koUx-W_projectRow').click())
-    await new Promise((resolve) => setTimeout(resolve, 600))
-    await page.screenshot({ path: path.join(OUT, 'ui-2-remote-expanded.png') })
-
-    const rows = await page.evaluate(() => {
-      const group = document.querySelector('.dshp-tag')?.closest('.koUx-W_projectRow')?.parentElement
-      return group ? group.querySelectorAll('.koUx-W_sessionRow').length : 0
+  // 远端行管理（P2/P3）：远端会话行菜单五项 + hover 三按钮 + 远端工作区菜单
+  // 远端数据会变：首个远端组可能只剩「已归档」会话（默认隐藏而变空组），
+  // 所以先展开所有远端组，再取第一个**真有可见会话行**的组作为被测目标。
+  await page.evaluate(() => {
+    for (const tag of document.querySelectorAll('.dshp-tag')) {
+      const row = tag.closest('.koUx-W_projectRow')
+      if (row && row.getAttribute('aria-expanded') !== 'true') row.click()
+    }
+  })
+  await new Promise((resolve) => setTimeout(resolve, 800))
+  const remoteMenu = await page.evaluate(() => {
+    const groups = [...document.querySelectorAll('.dshp-tag')]
+      .map((tag) => tag.closest('.koUx-W_projectRow')?.parentElement)
+      .filter(Boolean)
+    const group = groups.find((node) => node.querySelector('.koUx-W_sessionRow'))
+    const row = group?.querySelector('.koUx-W_sessionRow')
+    const projectRow = group?.querySelector('.koUx-W_projectRow')
+    return {
+      remoteGroups: groups.length,
+      hasRemoteRow: Boolean(row),
+      hasRemoteProject: Boolean(projectRow),
+      remoteRowButtons: row ? row.querySelectorAll('.koUx-W_rowActions button').length : 0,
+      remoteProjectButtons: projectRow ? projectRow.querySelectorAll('.koUx-W_rowActions button').length : 0,
+    }
+  })
+  first.remoteGroups = remoteMenu.remoteGroups
+  first.remoteRowButtons = remoteMenu.remoteRowButtons
+  if (!remoteMenu.hasRemoteRow) {
+    problems.push('远端组展开后没有会话行')
+  } else {
+    if (remoteMenu.remoteRowButtons < 3) {
+      problems.push(`远端会话行 hover 按钮不足 3 个（实际 ${remoteMenu.remoteRowButtons}）`)
+    }
+    // 打开远端会话行菜单
+    await page.evaluate(() => {
+      const groups = [...document.querySelectorAll('.dshp-tag')]
+        .map((tag) => tag.closest('.koUx-W_projectRow')?.parentElement)
+        .filter(Boolean)
+      const group = groups.find((node) => node.querySelector('.koUx-W_sessionRow'))
+      group?.querySelector('.koUx-W_sessionRow .koUx-W_rowActions button:last-child')?.click()
     })
-    if (rows === 0) problems.push('远端组展开后没有会话行可点')
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    const remoteItems = await menuItemsOf()
+    await page.screenshot({ path: path.join(OUT, 'ui-7-remote-session-menu.png') })
+    first.remoteSessionMenuItems = remoteItems
+    for (const label of ['重命名', '分叉会话', '复制 Session ID']) {
+      if (!remoteItems.some((item) => item.startsWith(label))) {
+        problems.push(`远端会话菜单缺少「${label}」（P2 对齐本地）`)
+      }
+    }
+    const hasPin = remoteItems.some((item) => item.startsWith('置顶会话') || item.startsWith('取消置顶'))
+    const hasArchive = remoteItems.some((item) => item.startsWith('归档会话') || item.startsWith('取消归档'))
+    if (!hasPin) problems.push('远端会话菜单缺少置顶/取消置顶')
+    if (!hasArchive) problems.push('远端会话菜单缺少归档/取消归档')
+    await page.keyboard.press('Escape')
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+  if (remoteMenu.hasRemoteProject) {
+    await page.evaluate(() => {
+      const groups = [...document.querySelectorAll('.dshp-tag')]
+        .map((tag) => tag.closest('.koUx-W_projectRow')?.parentElement)
+        .filter(Boolean)
+      const group = groups.find((node) => node.querySelector('.koUx-W_sessionRow'))
+      group?.querySelector('.koUx-W_projectRow .koUx-W_rowActions button:first-child')?.click()
+    })
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    const remoteWsItems = await menuItemsOf()
+    await page.screenshot({ path: path.join(OUT, 'ui-8-remote-workspace-menu.png') })
+    first.remoteWorkspaceMenuItems = remoteWsItems
+    for (const label of ['重命名', '删除工作区']) {
+      if (!remoteWsItems.some((item) => item.startsWith(label))) {
+        problems.push(`远端工作区菜单缺少「${label}」（P3）`)
+      }
+    }
+    await page.keyboard.press('Escape')
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
 
+  // 远端组此时已全部展开；滚到第一个有可见会话行的远端组，最多试 4 条会话，
+  // 取"有真人发言/富文本"的那条截图
+  const remoteRowCount = await page.evaluate(() => {
+    const groups = [...document.querySelectorAll('.dshp-tag')]
+      .map((tag) => tag.closest('.koUx-W_projectRow')?.parentElement)
+      .filter(Boolean)
+    const group = groups.find((node) => node.querySelector('.koUx-W_sessionRow'))
+    group?.scrollIntoView({ block: 'center' })
+    return groups.reduce((sum, node) => sum + node.querySelectorAll('.koUx-W_sessionRow').length, 0)
+  })
+  if (remoteRowCount === 0) problems.push('远端组展开后没有会话行可点')
+  await page.screenshot({ path: path.join(OUT, 'ui-2-remote-expanded.png') })
+
+  if (remoteRowCount > 0) {
     let panel = { chatNodes: 0, nativeTool: 0, foldRows: 0, actionBars: 0, customPanel: 0, preview: '' }
     const groupCount = await page.evaluate(() => document.querySelectorAll('.dshp-tag').length)
     let foundBubble = false
     for (let group = 0; group < Math.min(groupCount, 3) && !foundBubble; group += 1) {
       await page.evaluate((index) => {
         const tags = document.querySelectorAll('.dshp-tag')
-        tags[index]?.closest('.koUx-W_projectRow')?.click()
+        const row = tags[index]?.closest('.koUx-W_projectRow')
+        if (row && row.getAttribute('aria-expanded') !== 'true') row.click()
       }, group)
       await new Promise((resolve) => setTimeout(resolve, 400))
       const rows = await page.evaluate((index) => {

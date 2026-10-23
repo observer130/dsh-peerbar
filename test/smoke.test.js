@@ -16,15 +16,27 @@ test('宿主半模块可被真实导入，导出齐全', async () => {
     'buildEnvelope',
     'exchangeCookie',
     'callRemote',
+    'callRpc',
     'listSessions',
     'clampLimit',
     'readRawPage',
     'renameRemoteSession',
     'probePage',
     'disposeAgents',
+    'agentFor',
+    'classifyNetworkError',
   ]) {
     assert.equal(typeof remote[name], 'function', `remote.js 缺少导出 ${name}`)
   }
+
+  const stream = await import('../lib/stream.js')
+  for (const name of ['readWorkspaceBaseline', 'encodeFrame', 'encodeTextFrame', 'decodeFrames']) {
+    assert.equal(typeof stream[name], 'function', `stream.js 缺少导出 ${name}`)
+  }
+
+  const rpc = await import('../lib/rpc.js')
+  assert.equal(typeof rpc.isAllowedRpc, 'function')
+  assert.equal(typeof rpc.isPlainArgs, 'function')
 
   const peers = await import('../lib/peers.js')
   assert.equal(typeof peers.createPeers, 'function')
@@ -102,5 +114,78 @@ test('session 路由处理器可执行，不抛引用错误', async () => {
 
   // 不存在的 Host：走远端分支的查找
   const missing = await call('/dsh-peerbar/api/session?hostId=h_nope&id=x&limit=5')
+  assert.equal(missing.statusCode, 404)
+})
+
+/**
+ * /hosts/<id>/rpc 路由真跑一遍：白名单拒绝必须在转发前返回 400，
+ * 未知 Host 返回 404。防止「白名单形同虚设 / 路由引用错误」回归。
+ */
+test('rpc 路由处理器可执行，白名单生效', async () => {
+  const { apply } = await import('../lib/index.js')
+  const routes = []
+  const ctx = {
+    logger: { info() {}, warn() {} },
+    effect(fn) {
+      fn()
+      return () => {}
+    },
+    webServer: {
+      register(route) {
+        routes.push(route)
+        return () => {}
+      },
+    },
+    sessionController: { async list() { return { items: [] } } },
+  }
+  apply(ctx, { probeIntervalMs: 60000 })
+
+  const hostsRoute = routes.find((r) => r.path === '/dsh-peerbar/api/hosts' && r.kind === 'prefix')
+  assert.ok(hostsRoute, '没有注册 /hosts 前缀路由')
+
+  const post = (url, body) =>
+    new Promise((resolve, reject) => {
+      const chunks = [Buffer.from(JSON.stringify(body))]
+      const req = {
+        method: 'POST',
+        url,
+        headers: {
+          host: '127.0.0.1:0',
+          origin: 'http://127.0.0.1:0',
+          'x-dsh-peerbar-action': '1',
+          'content-type': 'application/json',
+        },
+        socket: { remoteAddress: '127.0.0.1' },
+        on(event, fn) {
+          if (event === 'data') fn(chunks[0])
+          if (event === 'end') fn()
+        },
+        destroy() {},
+      }
+      const res = {
+        statusCode: 0,
+        body: '',
+        setHeader() {},
+        writeHead(code) {
+          this.statusCode = code
+        },
+        end(chunk) {
+          this.body = String(chunk ?? '')
+          resolve(this)
+        },
+      }
+      Promise.resolve(hostsRoute.handler(req, res)).catch(reject)
+    })
+
+  // 白名单外端点：400（且不会去碰远端）
+  const denied = await post('/dsh-peerbar/api/hosts/h_nope/rpc', { endpoint: 'workspace/follow', args: {} })
+  assert.equal(denied.statusCode, 400, `流式端点应被白名单拒绝: ${denied.statusCode}`)
+  assert.match(denied.body, /白名单/)
+
+  const denied2 = await post('/dsh-peerbar/api/hosts/h_nope/rpc', { endpoint: 'settings/mutate', args: {} })
+  assert.equal(denied2.statusCode, 400)
+
+  // 白名单内但 Host 不存在：404
+  const missing = await post('/dsh-peerbar/api/hosts/h_nope/rpc', { endpoint: 'session/prompt', args: {} })
   assert.equal(missing.statusCode, 404)
 })

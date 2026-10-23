@@ -74,6 +74,44 @@ test('groupSessions 把缺失 cwd 归到 (unknown)', () => {
   assert.equal(groups[0].name, '(unknown)')
 })
 
+test('groupSessions 带 registry：workspaceId/archived/pinned 与手工序', () => {
+  const registry = {
+    items: [
+      {
+        workspaceId: 'ws-real-1',
+        path: '/a',
+        title: '改过名的工作区',
+        sessionIds: ['s2', 's1'],
+      },
+    ],
+    archivedSessionIds: ['s1'],
+    pinnedSessionIds: ['s2'],
+  }
+  const items = [
+    { sessionId: 's1', cwd: '/a', updatedAt: 10, projections: { values: { title: '一' } } },
+    { sessionId: 's2', cwd: '/a', updatedAt: 30, projections: { values: { title: '二' } } },
+    { sessionId: 's3', cwd: '/b', updatedAt: 50, projections: { values: { title: '三' } } },
+  ]
+  const groups = groupSessions('h_1', items, registry)
+  // /b 组无 registry → workspaceId 为 null，行为退回 cwd 合成
+  const gb = groups.find((g) => g.cwd === '/b')
+  assert.equal(gb.workspaceId, null)
+  assert.equal(gb.sessions[0].archived, false)
+  // /a 组带真实 workspaceId，s2 手工序在前（updatedAt 反序被压过）
+  const ga = groups.find((g) => g.cwd === '/a')
+  assert.equal(ga.workspaceId, 'ws-real-1')
+  assert.deepEqual(ga.sessions.map((s) => s.rawId), ['s2', 's1'])
+  assert.equal(ga.sessions[0].pinned, true)
+  assert.equal(ga.sessions[1].archived, true)
+})
+
+test('groupSessions 无 registry 时 archived/pinned 全 false', () => {
+  const groups = groupSessions('h_1', [{ sessionId: 's1', cwd: '/a', updatedAt: 1 }])
+  assert.equal(groups[0].sessions[0].archived, false)
+  assert.equal(groups[0].sessions[0].pinned, false)
+  assert.equal(groups[0].workspaceId, null)
+})
+
 test('groupSessions 丢掉子代理会话（origin=subagent）', () => {
   const items = [
     { sessionId: 'parent', cwd: '/a', updatedAt: 20 },
@@ -94,7 +132,7 @@ test('groupSessions 丢掉子代理会话（origin=subagent）', () => {
   )
 })
 
-test('groupSessions 按传入归档集打 archived 标记', () => {
+test('groupSessions 按传入归档集打 archived 标记（兼容 {archivedSessionIds} 形状）', () => {
   const items = [
     { sessionId: 's1', cwd: '/a', updatedAt: 20 },
     { sessionId: 's2', cwd: '/a', updatedAt: 10 },
