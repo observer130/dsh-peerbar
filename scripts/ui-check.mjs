@@ -201,7 +201,7 @@ try {
           return {
             messages: document.querySelectorAll('.dshp-msg').length,
             userBubbles: document.querySelectorAll('.vq-vBq_userRow').length,
-            toolChips: document.querySelectorAll('.dshp-tool').length,
+            toolCards: document.querySelectorAll('.etvktG_root').length,
             richContent: body ? body.querySelectorAll('table, pre, h1, h2, h3, ul, ol, blockquote').length : 0,
             firstToolWidth: rect ? Math.round(rect.width) : null,
           taskRows: document.querySelectorAll('.KXphHq_title').length,
@@ -226,8 +226,13 @@ try {
     if (panel.messages === 0 && panel.userBubbles === 0) problems.push('正文面板没有任何消息')
     if (panel.composer === 0) problems.push('底部没有 composer 容器')
     if (panel.actionBars === 0) problems.push('消息没有动作条（FEkWtG_actions 为 0）')
-    if (panel.firstToolWidth && panel.firstToolWidth > 200) {
-      problems.push(`工具调用没有收成胶囊（首个体宽 ${panel.firstToolWidth}px）`)
+    if (panel.toolCards > 0) {
+      const card = await page.evaluate(() => {
+        const node = document.querySelector('.etvktG_root')
+        return node ? node.innerText.split('\n')[0] : null
+      })
+      first.toolCardTitle = card
+      if (!card) problems.push('工具卡没有标题行')
     }
     if (!foundBubble) warnings.push('抽样到的会话里没有真人发言，用户气泡样式未被覆盖')
     if (panel.richContent === 0 && panel.messages > 0) {
