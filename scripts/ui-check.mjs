@@ -71,10 +71,15 @@ try {
       sessionRows: document.querySelectorAll('.koUx-W_sessionRow').length,
       remoteTags: [...document.querySelectorAll('.dshp-tag')].map((node) => node.textContent),
       firstGroups: rows.slice(0, 5).map((node) => node.innerText.replace(/\s+/g, ' ').trim()),
+      // 原生：blank 行标题是「新会话」，未命名回退是「未命名」
       blankRows: [...document.querySelectorAll('.koUx-W_sessionRow .koUx-W_title')].filter(
-        (node) => node.textContent.trim() === '未命名会话',
+        (node) => node.textContent.trim() === '新会话',
+      ).length,
+      untitledRows: [...document.querySelectorAll('.koUx-W_sessionRow .koUx-W_title')].filter(
+        (node) => node.textContent.trim() === '未命名',
       ).length,
       menuButtons: document.querySelectorAll('.koUx-W_rowActions button').length,
+      overflowLabel: document.querySelector('.hP3ldq_sessionOverflowButton')?.textContent?.trim() ?? null,
       // 原生 idle 行走 sidebar.session.row.leading 空槽，不画状态点
       idleDots: document.querySelectorAll('.koUx-W_sessionRow .koUx-W_slot [data-state="idle"]').length,
       idleSlotWidth: (() => {
@@ -98,6 +103,9 @@ try {
   if (first.idleDots > 0) problems.push(`idle 行不该画状态点（实际 ${first.idleDots} 个），原生只有在途/完成态才画`)
   if (first.idleSlotWidth !== null && first.idleSlotWidth !== 16) {
     problems.push(`不画点后 slot 仍应占 16px（实际 ${first.idleSlotWidth}px）`)
+  }
+  if (first.overflowLabel && !/^展开其余 \d+ 个会话$/.test(first.overflowLabel)) {
+    problems.push(`溢出按钮文案应为「展开其余 N 个会话」（实际「${first.overflowLabel}」）`)
   }
 
   // 行菜单：先 hover 出 ⋯，再点开，确认菜单项与定位
@@ -192,6 +200,12 @@ try {
     for (const label of ['按工作区', '单列表', '手动排序', '最近更新', '隐藏已归档', '全部对话', '仅显示已归档']) {
       if (!items.some((item) => item.startsWith(label))) problems.push(`视图选项缺少「${label}」`)
     }
+    // 分组/排序/筛选是菜单里的 label 行（不是 menuitem），用整段文本核对
+    const menuLabels = await page.evaluate(() => document.querySelector('[role="menu"]')?.innerText ?? '')
+    first.viewOptionLabels = menuLabels.replace(/\s+/g, ' ').slice(0, 160)
+    for (const label of ['分组方式', '排序方式', '筛选会话']) {
+      if (!menuLabels.includes(label)) problems.push(`视图选项缺少分组标题「${label}」`)
+    }
     await page.keyboard.press('Escape')
     await new Promise((resolve) => setTimeout(resolve, 200))
   } else {
@@ -205,8 +219,12 @@ try {
     const items = await menuItemsOf()
     await page.screenshot({ path: path.join(OUT, 'ui-5-workspace-menu.png') })
     first.workspaceMenuItems = items
-    for (const label of ['重命名工作区', '删除工作区']) {
+    for (const label of ['重命名', '删除工作区']) {
       if (!items.some((item) => item.startsWith(label))) problems.push(`工作区菜单缺少「${label}」`)
+    }
+    // 原生菜单项是「重命名」；「重命名工作区」只出现在对话框标题里
+    if (items.some((item) => item.trim() === '重命名工作区')) {
+      problems.push('工作区菜单的改名项应为「重命名」，不该带「工作区」')
     }
     await page.keyboard.press('Escape')
     await new Promise((resolve) => setTimeout(resolve, 200))
@@ -281,7 +299,7 @@ try {
     const remoteWsItems = await menuItemsOf()
     await page.screenshot({ path: path.join(OUT, 'ui-8-remote-workspace-menu.png') })
     first.remoteWorkspaceMenuItems = remoteWsItems
-    for (const label of ['重命名工作区', '删除工作区']) {
+    for (const label of ['重命名', '删除工作区']) {
       if (!remoteWsItems.some((item) => item.startsWith(label))) {
         problems.push(`远端工作区菜单缺少「${label}」（P3）`)
       }
