@@ -104,6 +104,47 @@ try {
     )
     first.hoverButtons = hoverButtons
     if (hoverButtons < 3) problems.push(`会话行 hover 按钮不足 3 个（实际 ${hoverButtons}）`)
+    // 图标度量：原生会话行是 16×16 按钮 + 14px 图标 + 15px 间距
+    // （ui-workspace `ArchiveSessionRowButton` / `PinSessionRowButton` 与 Rows.module.css）。
+    // 归档图标的 artwork 默认 size=20，不显式传 14 会被 16px 按钮压成 16×20、纵向拉长。
+    const iconMetrics = await page.evaluate(() => {
+      const row = document.querySelector('.koUx-W_sessionRow')
+      const actions = row?.querySelector('.koUx-W_rowActions')
+      if (!actions) return null
+      return {
+        gap: getComputedStyle(actions).gap,
+        items: [...actions.querySelectorAll('button')].map((button) => {
+          const box = button.getBoundingClientRect()
+          const svg = button.querySelector('svg')?.getBoundingClientRect()
+          return {
+            label: button.getAttribute('aria-label') || button.title || '',
+            button: [Math.round(box.width), Math.round(box.height)],
+            svg: svg ? [Math.round(svg.width), Math.round(svg.height)] : null,
+          }
+        }),
+      }
+    })
+    first.iconMetrics = iconMetrics
+    if (!iconMetrics) {
+      problems.push('会话行没有行操作区（.koUx-W_rowActions）')
+    } else {
+      if (iconMetrics.gap !== '15px') problems.push(`行操作区间距应为 15px（实际 ${iconMetrics.gap}）`)
+      for (const item of iconMetrics.items) {
+        if (item.button[0] !== 16 || item.button[1] !== 16) {
+          problems.push(`「${item.label}」按钮应为 16×16（实际 ${item.button.join('×')}）`)
+        }
+        if (!item.svg) continue
+        if (item.svg[0] !== item.svg[1]) {
+          problems.push(`「${item.label}」图标比例失真（${item.svg.join('×')}）`)
+        }
+        if (![14, 16].includes(item.svg[0])) {
+          problems.push(`「${item.label}」图标尺寸应为 14 或 16（实际 ${item.svg[0]}）`)
+        }
+        if (/归档|置顶/.test(item.label) && item.svg[0] !== 14) {
+          problems.push(`「${item.label}」图标应与原生一致为 14px（实际 ${item.svg[0]}）`)
+        }
+      }
+    }
     await page.click('.koUx-W_sessionRow .koUx-W_rowActions button:last-child')
     await new Promise((resolve) => setTimeout(resolve, 500))
     const menuItems = await menuItemsOf()
