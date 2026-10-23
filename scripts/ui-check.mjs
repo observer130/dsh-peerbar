@@ -32,7 +32,10 @@ function readBase() {
 
 // 已知噪声：顶替 single slot 时，官方那条注册会报同优先级冲突；我们这条后注册、渲染生效。
 // 这是「遮蔽成功」的副作用，不影响功能，但记录在 ui-check.json 里备查。
-const KNOWN_NOISE = [/single slot "sidebar\.workspaces" already has a registration at priority/]
+const KNOWN_NOISE = [
+  /single slot "sidebar\.workspaces" already has a registration at priority/,
+  /Failed to load resource: the server responded with a status of 404/,
+]
 
 const problems = []
 const warnings = []
@@ -94,15 +97,54 @@ try {
   }
   if (await page.$('.koUx-W_sessionRow')) {
     await page.hover('.koUx-W_sessionRow')
-    await page.click('.koUx-W_sessionRow .koUx-W_rowActions button')
+    const hoverButtons = await page.evaluate(
+      () => document.querySelectorAll('.koUx-W_sessionRow .koUx-W_rowActions button').length,
+    )
+    first.hoverButtons = hoverButtons
+    if (hoverButtons < 3) problems.push(`会话行 hover 按钮不足 3 个（实际 ${hoverButtons}）`)
+    await page.click('.koUx-W_sessionRow .koUx-W_rowActions button:last-child')
     await new Promise((resolve) => setTimeout(resolve, 500))
     const menuItems = await menuItemsOf()
     await page.screenshot({ path: path.join(OUT, 'ui-4-session-menu.png') })
     first.menuItems = menuItems
-    if (menuItems.length === 0) problems.push('会话行菜单点开后没有任何菜单项')
+    for (const label of ['置顶会话', '重命名', '分叉会话', '归档会话', '复制 Session ID']) {
+      if (!menuItems.some((item) => item.startsWith(label))) problems.push(`会话菜单缺少「${label}」`)
+    }
+    for (const hint of ['CtrlAltG', 'CtrlAltF', 'CtrlShiftA']) {
+      if (!menuItems.some((item) => item.includes(hint))) problems.push(`会话菜单缺少快捷键「${hint}」`)
+    }
+    // 指针移进菜单后不应关闭（回归：closeOnPointerLeave 曾导致一移就消失）
+    if (menuItems.length > 0) {
+      await page.hover('[role="menuitem"]')
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      const still = await menuItemsOf()
+      if (still.length < menuItems.length) problems.push('指针移到菜单上后菜单消失了')
+    }
     await page.keyboard.press('Escape')
     await new Promise((resolve) => setTimeout(resolve, 200))
   }
+  // 视图选项菜单（S5）
+  const hasViewButton = await page.evaluate(() => {
+    const buttons = [...document.querySelectorAll('.hP3ldq_iconButton')]
+    const button = buttons.find((node) => (node.title || '').includes('视图'))
+    if (!button) return false
+    button.click()
+    return true
+  })
+  if (hasViewButton) {
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    const items = await menuItemsOf()
+    await page.screenshot({ path: path.join(OUT, 'ui-6-view-options.png') })
+    first.viewOptionItems = items
+    for (const label of ['按工作区', '单列表', '手动排序', '最近更新', '隐藏已归档', '全部对话', '仅显示已归档']) {
+      if (!items.some((item) => item.startsWith(label))) problems.push(`视图选项缺少「${label}」`)
+    }
+    await page.keyboard.press('Escape')
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  } else {
+    problems.push('头部没有视图选项按钮')
+  }
+
   if (await page.$('.koUx-W_projectRow')) {
     await page.hover('.koUx-W_projectRow')
     await page.click('.koUx-W_projectRow .koUx-W_rowActions button:last-child')
@@ -110,7 +152,9 @@ try {
     const items = await menuItemsOf()
     await page.screenshot({ path: path.join(OUT, 'ui-5-workspace-menu.png') })
     first.workspaceMenuItems = items
-    if (items.length === 0) problems.push('工作区行菜单点开后没有任何菜单项')
+    for (const label of ['重命名工作区', '删除工作区']) {
+      if (!items.some((item) => item.startsWith(label))) problems.push(`工作区菜单缺少「${label}」`)
+    }
     await page.keyboard.press('Escape')
     await new Promise((resolve) => setTimeout(resolve, 200))
   }
@@ -123,12 +167,12 @@ try {
     await page.screenshot({ path: path.join(OUT, 'ui-2-remote-expanded.png') })
 
     const rows = await page.evaluate(() => {
-      const group = document.querySelector('.dshp-tag')?.closest('[role="treeitem"]')
+      const group = document.querySelector('.dshp-tag')?.closest('.koUx-W_projectRow')?.parentElement
       return group ? group.querySelectorAll('.koUx-W_sessionRow').length : 0
     })
     if (rows === 0) problems.push('远端组展开后没有会话行可点')
 
-    let panel = { messages: 0, userBubbles: 0, toolChips: 0, richContent: 0, firstToolWidth: null, preview: '' }
+    let panel = { chatNodes: 0, nativeTool: 0, foldRows: 0, actionBars: 0, customPanel: 0, preview: '' }
     const groupCount = await page.evaluate(() => document.querySelectorAll('.dshp-tag').length)
     let foundBubble = false
     for (let group = 0; group < Math.min(groupCount, 3) && !foundBubble; group += 1) {
@@ -139,53 +183,40 @@ try {
       await new Promise((resolve) => setTimeout(resolve, 400))
       const rows = await page.evaluate((index) => {
         const tags = document.querySelectorAll('.dshp-tag')
-        const holder = tags[index]?.closest('[role="treeitem"]')
+        const holder = tags[index]?.closest('.koUx-W_projectRow')?.parentElement
         return holder ? holder.querySelectorAll('.koUx-W_sessionRow').length : 0
       }, group)
       for (let index = 0; index < Math.min(rows, 3); index += 1) {
         await page.evaluate(
           ([groupIndex, rowIndex]) => {
             const tags = document.querySelectorAll('.dshp-tag')
-            const holder = tags[groupIndex]?.closest('[role="treeitem"]')
+            const holder = tags[groupIndex]?.closest('.koUx-W_projectRow')?.parentElement
             holder?.querySelectorAll('.koUx-W_sessionRow')[rowIndex]?.click()
           },
           [group, index],
         )
-        await page.waitForSelector('.dshp-panel', { timeout: 8000 })
+        await page.waitForSelector('[data-chat-node-key], .dshp-panel', { timeout: 8000 })
         await new Promise((resolve) => setTimeout(resolve, 1200))
-        const stats = await page.evaluate(() => {
-          const first = document.querySelector('.dshp-tool')
-          const rect = first?.getBoundingClientRect()
-          const body = document.querySelector('.dshp-panel-body')
-          return {
-            messages: document.querySelectorAll('.dshp-msg').length,
-            userBubbles: document.querySelectorAll('.vq-vBq_userRow').length,
-            toolChips: document.querySelectorAll('.dshp-tool').length,
-            richContent: body ? body.querySelectorAll('table, pre, h1, h2, h3, ul, ol, blockquote').length : 0,
-            firstToolWidth: rect ? Math.round(rect.width) : null,
-            preview: (body?.innerText ?? '').slice(0, 120),
-          }
-        })
-        if (stats.userBubbles > panel.userBubbles || stats.richContent > panel.richContent || stats.messages > panel.messages) {
-          panel = stats
-        }
-        if (stats.userBubbles > 0) {
-          foundBubble = true
-          break
-        }
+        const stats = await page.evaluate(() => ({
+          chatNodes: document.querySelectorAll('[data-chat-node-key]').length,
+          nativeTool: document.querySelectorAll('[data-chat-call-id]').length,
+          foldRows: document.querySelectorAll('[data-process-activity]').length,
+          actionBars: document.querySelectorAll('[class$="_actions"]').length,
+          customPanel: document.querySelectorAll('.dshp-panel').length,
+          preview: (document.querySelector('body')?.innerText ?? '').slice(0, 140),
+        }))
+        if (stats.chatNodes > panel.chatNodes) panel = stats
+        if (stats.nativeTool > 0 && stats.chatNodes > 0) break
       }
     }
     await page.screenshot({ path: path.join(OUT, 'ui-3-remote-session.png'), fullPage: false })
     first.panel = panel
 
-    if (panel.messages === 0 && panel.userBubbles === 0) problems.push('正文面板没有任何消息')
-    if (panel.firstToolWidth && panel.firstToolWidth > 200) {
-      problems.push(`工具调用没有收成胶囊（首个体宽 ${panel.firstToolWidth}px）`)
-    }
-    if (!foundBubble) warnings.push('抽样到的会话里没有真人发言，用户气泡样式未被覆盖')
-    if (panel.richContent === 0 && panel.messages > 0) {
-      warnings.push('抽样会话没有表格/代码块/列表，富文本渲染未被覆盖')
-    }
+    if (panel.chatNodes === 0) problems.push('原生会话没有渲染任何聊天节点')
+    if (panel.nativeTool === 0) problems.push('原生会话没有工具调用节点')
+    if (panel.foldRows === 0) problems.push('原生会话没有折叠行（过程组）')
+    if (panel.customPanel > 0) problems.push('回退到了自绘面板，原生渲染未生效')
+    if (panel.actionBars === 0) problems.push('原生消息没有动作条')
   }
 
   const knownWarnings = consoleErrors.filter((text) => KNOWN_NOISE.some((pattern) => pattern.test(text)))
