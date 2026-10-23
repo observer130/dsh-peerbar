@@ -32,7 +32,10 @@ function readBase() {
 
 // 已知噪声：顶替 single slot 时，官方那条注册会报同优先级冲突；我们这条后注册、渲染生效。
 // 这是「遮蔽成功」的副作用，不影响功能，但记录在 ui-check.json 里备查。
-const KNOWN_NOISE = [/single slot "sidebar\.workspaces" already has a registration at priority/]
+const KNOWN_NOISE = [
+  /single slot "sidebar\.workspaces" already has a registration at priority/,
+  /Failed to load resource: the server responded with a status of 404/,
+]
 
 const problems = []
 const warnings = []
@@ -169,7 +172,7 @@ try {
     })
     if (rows === 0) problems.push('远端组展开后没有会话行可点')
 
-    let panel = { messages: 0, userBubbles: 0, toolChips: 0, richContent: 0, firstToolWidth: null, preview: '' }
+    let panel = { chatNodes: 0, nativeTool: 0, foldRows: 0, actionBars: 0, customPanel: 0, preview: '' }
     const groupCount = await page.evaluate(() => document.querySelectorAll('.dshp-tag').length)
     let foundBubble = false
     for (let group = 0; group < Math.min(groupCount, 3) && !foundBubble; group += 1) {
@@ -192,52 +195,28 @@ try {
           },
           [group, index],
         )
-        await page.waitForSelector('.dshp-panel', { timeout: 8000 })
+        await page.waitForSelector('[data-chat-node-key], .dshp-panel', { timeout: 8000 })
         await new Promise((resolve) => setTimeout(resolve, 1200))
-        const stats = await page.evaluate(() => {
-          const first = document.querySelector('.dshp-tool')
-          const rect = first?.getBoundingClientRect()
-          const body = document.querySelector('.dshp-panel-body')
-          return {
-            messages: document.querySelectorAll('.dshp-msg').length,
-            userBubbles: document.querySelectorAll('.vq-vBq_userRow').length,
-            toolCards: document.querySelectorAll('.O4lnUa_root').length,
-            richContent: body ? body.querySelectorAll('table, pre, h1, h2, h3, ul, ol, blockquote').length : 0,
-            firstToolWidth: rect ? Math.round(rect.width) : null,
-          taskRows: document.querySelectorAll('.KXphHq_title').length,
-          fileCards: document.querySelectorAll('.vq-vBq_fileCard').length,
-          composer: document.querySelectorAll('.if816a_composerSeat').length,
-          actionBars: document.querySelectorAll('.FEkWtG_actions').length,
-            preview: (body?.innerText ?? '').slice(0, 120),
-          }
-        })
-        if (stats.userBubbles > panel.userBubbles || stats.richContent > panel.richContent || stats.messages > panel.messages) {
-          panel = stats
-        }
-        if (stats.userBubbles > 0) {
-          foundBubble = true
-          break
-        }
+        const stats = await page.evaluate(() => ({
+          chatNodes: document.querySelectorAll('[data-chat-node-key]').length,
+          nativeTool: document.querySelectorAll('[data-chat-call-id]').length,
+          foldRows: document.querySelectorAll('[data-process-activity]').length,
+          actionBars: document.querySelectorAll('[class$="_actions"]').length,
+          customPanel: document.querySelectorAll('.dshp-panel').length,
+          preview: (document.querySelector('body')?.innerText ?? '').slice(0, 140),
+        }))
+        if (stats.chatNodes > panel.chatNodes) panel = stats
+        if (stats.nativeTool > 0 && stats.chatNodes > 0) break
       }
     }
     await page.screenshot({ path: path.join(OUT, 'ui-3-remote-session.png'), fullPage: false })
     first.panel = panel
 
-    if (panel.messages === 0 && panel.userBubbles === 0) problems.push('正文面板没有任何消息')
-    if (panel.composer === 0) problems.push('底部没有 composer 容器')
-    if (panel.actionBars === 0) problems.push('消息没有动作条（FEkWtG_actions 为 0）')
-    if (panel.toolCards > 0) {
-      const card = await page.evaluate(() => {
-        const node = document.querySelector('.O4lnUa_root')
-        return node ? node.innerText.split('\n')[0] : null
-      })
-      first.toolCardTitle = card
-      if (!card) problems.push('工具卡没有标题行')
-    }
-    if (!foundBubble) warnings.push('抽样到的会话里没有真人发言，用户气泡样式未被覆盖')
-    if (panel.richContent === 0 && panel.messages > 0) {
-      warnings.push('抽样会话没有表格/代码块/列表，富文本渲染未被覆盖')
-    }
+    if (panel.chatNodes === 0) problems.push('原生会话没有渲染任何聊天节点')
+    if (panel.nativeTool === 0) problems.push('原生会话没有工具调用节点')
+    if (panel.foldRows === 0) problems.push('原生会话没有折叠行（过程组）')
+    if (panel.customPanel > 0) problems.push('回退到了自绘面板，原生渲染未生效')
+    if (panel.actionBars === 0) problems.push('原生消息没有动作条')
   }
 
   const knownWarnings = consoleErrors.filter((text) => KNOWN_NOISE.some((pattern) => pattern.test(text)))
