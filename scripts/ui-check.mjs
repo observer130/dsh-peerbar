@@ -75,6 +75,12 @@ try {
         (node) => node.textContent.trim() === '未命名会话',
       ).length,
       menuButtons: document.querySelectorAll('.koUx-W_rowActions button').length,
+      // 原生 idle 行走 sidebar.session.row.leading 空槽，不画状态点
+      idleDots: document.querySelectorAll('.koUx-W_sessionRow .koUx-W_slot [data-state="idle"]').length,
+      idleSlotWidth: (() => {
+        const slot = document.querySelector('.koUx-W_sessionRow .koUx-W_slot')
+        return slot ? Math.round(slot.getBoundingClientRect().width) : null
+      })(),
       sessionPaddingLeft: session ? getComputedStyle(session).paddingLeft : null,
       treeHeight: tree ? tree.getBoundingClientRect().height : 0,
     }
@@ -89,6 +95,10 @@ try {
     problems.push(`会话行没有缩进（padding-left=${first.sessionPaddingLeft}）`)
   }
   if (first.menuButtons === 0) problems.push('行内没有任何菜单按钮（.koUx-W_rowActions button 为 0）')
+  if (first.idleDots > 0) problems.push(`idle 行不该画状态点（实际 ${first.idleDots} 个），原生只有在途/完成态才画`)
+  if (first.idleSlotWidth !== null && first.idleSlotWidth !== 16) {
+    problems.push(`不画点后 slot 仍应占 16px（实际 ${first.idleSlotWidth}px）`)
+  }
 
   // 行菜单：先 hover 出 ⋯，再点开，确认菜单项与定位
   const menuItemsOf = async () => {
@@ -203,25 +213,31 @@ try {
   }
 
   // 远端行管理（P2/P3）：远端会话行菜单五项 + hover 三按钮 + 远端工作区菜单
-  // 远端组默认折叠，先展开
+  // 远端数据会变：首个远端组可能只剩「已归档」会话（默认隐藏而变空组），
+  // 所以先展开所有远端组，再取第一个**真有可见会话行**的组作为被测目标。
   await page.evaluate(() => {
-    const tag = document.querySelector('.dshp-tag')
-    const row = tag?.closest('.koUx-W_projectRow')
-    if (row && row.getAttribute('aria-expanded') !== 'true') row.click()
+    for (const tag of document.querySelectorAll('.dshp-tag')) {
+      const row = tag.closest('.koUx-W_projectRow')
+      if (row && row.getAttribute('aria-expanded') !== 'true') row.click()
+    }
   })
-  await new Promise((resolve) => setTimeout(resolve, 600))
+  await new Promise((resolve) => setTimeout(resolve, 800))
   const remoteMenu = await page.evaluate(() => {
-    const tag = document.querySelector('.dshp-tag')
-    const group = tag?.closest('.koUx-W_projectRow')?.parentElement
+    const groups = [...document.querySelectorAll('.dshp-tag')]
+      .map((tag) => tag.closest('.koUx-W_projectRow')?.parentElement)
+      .filter(Boolean)
+    const group = groups.find((node) => node.querySelector('.koUx-W_sessionRow'))
     const row = group?.querySelector('.koUx-W_sessionRow')
-    const projectRow = tag?.closest('.koUx-W_projectRow')
+    const projectRow = group?.querySelector('.koUx-W_projectRow')
     return {
+      remoteGroups: groups.length,
       hasRemoteRow: Boolean(row),
       hasRemoteProject: Boolean(projectRow),
       remoteRowButtons: row ? row.querySelectorAll('.koUx-W_rowActions button').length : 0,
       remoteProjectButtons: projectRow ? projectRow.querySelectorAll('.koUx-W_rowActions button').length : 0,
     }
   })
+  first.remoteGroups = remoteMenu.remoteGroups
   first.remoteRowButtons = remoteMenu.remoteRowButtons
   if (!remoteMenu.hasRemoteRow) {
     problems.push('远端组展开后没有会话行')
@@ -231,10 +247,11 @@ try {
     }
     // 打开远端会话行菜单
     await page.evaluate(() => {
-      const tag = document.querySelector('.dshp-tag')
-      const group = tag?.closest('.koUx-W_projectRow')?.parentElement
-      const row = group?.querySelector('.koUx-W_sessionRow')
-      row?.querySelector('.koUx-W_rowActions button:last-child')?.click()
+      const groups = [...document.querySelectorAll('.dshp-tag')]
+        .map((tag) => tag.closest('.koUx-W_projectRow')?.parentElement)
+        .filter(Boolean)
+      const group = groups.find((node) => node.querySelector('.koUx-W_sessionRow'))
+      group?.querySelector('.koUx-W_sessionRow .koUx-W_rowActions button:last-child')?.click()
     })
     await new Promise((resolve) => setTimeout(resolve, 500))
     const remoteItems = await menuItemsOf()
@@ -254,9 +271,11 @@ try {
   }
   if (remoteMenu.hasRemoteProject) {
     await page.evaluate(() => {
-      const tag = document.querySelector('.dshp-tag')
-      const row = tag?.closest('.koUx-W_projectRow')
-      row?.querySelector('.koUx-W_rowActions button:first-child')?.click()
+      const groups = [...document.querySelectorAll('.dshp-tag')]
+        .map((tag) => tag.closest('.koUx-W_projectRow')?.parentElement)
+        .filter(Boolean)
+      const group = groups.find((node) => node.querySelector('.koUx-W_sessionRow'))
+      group?.querySelector('.koUx-W_projectRow .koUx-W_rowActions button:first-child')?.click()
     })
     await new Promise((resolve) => setTimeout(resolve, 500))
     const remoteWsItems = await menuItemsOf()
@@ -271,23 +290,20 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 200))
   }
 
-  // 展开第一个远端组，最多试 4 条会话，取"有真人发言/富文本"的那条截图
-  // 注意：上面 P2 菜单断言可能已展开过，点第二下会收起——只在折叠时点
-  const tagHandle = await page.$('.dshp-tag')
-  if (tagHandle) {
-    await tagHandle.evaluate((node) => {
-      const row = node.closest('.koUx-W_projectRow')
-      if (row && row.getAttribute('aria-expanded') !== 'true') row.click()
-    })
-    await new Promise((resolve) => setTimeout(resolve, 600))
-    await page.screenshot({ path: path.join(OUT, 'ui-2-remote-expanded.png') })
+  // 远端组此时已全部展开；滚到第一个有可见会话行的远端组，最多试 4 条会话，
+  // 取"有真人发言/富文本"的那条截图
+  const remoteRowCount = await page.evaluate(() => {
+    const groups = [...document.querySelectorAll('.dshp-tag')]
+      .map((tag) => tag.closest('.koUx-W_projectRow')?.parentElement)
+      .filter(Boolean)
+    const group = groups.find((node) => node.querySelector('.koUx-W_sessionRow'))
+    group?.scrollIntoView({ block: 'center' })
+    return groups.reduce((sum, node) => sum + node.querySelectorAll('.koUx-W_sessionRow').length, 0)
+  })
+  if (remoteRowCount === 0) problems.push('远端组展开后没有会话行可点')
+  await page.screenshot({ path: path.join(OUT, 'ui-2-remote-expanded.png') })
 
-    const rows = await page.evaluate(() => {
-      const group = document.querySelector('.dshp-tag')?.closest('.koUx-W_projectRow')?.parentElement
-      return group ? group.querySelectorAll('.koUx-W_sessionRow').length : 0
-    })
-    if (rows === 0) problems.push('远端组展开后没有会话行可点')
-
+  if (remoteRowCount > 0) {
     let panel = { chatNodes: 0, nativeTool: 0, foldRows: 0, actionBars: 0, customPanel: 0, preview: '' }
     const groupCount = await page.evaluate(() => document.querySelectorAll('.dshp-tag').length)
     let foundBubble = false
