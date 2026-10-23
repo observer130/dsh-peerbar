@@ -17,16 +17,21 @@ test('宿主半模块可被真实导入，导出齐全', async () => {
     'exchangeCookie',
     'callRemote',
     'callRpc',
-    'readStreamFirst',
-    'readWorkspaceBaseline',
     'listSessions',
     'clampLimit',
     'readRawPage',
     'renameRemoteSession',
     'probePage',
     'disposeAgents',
+    'agentFor',
+    'classifyNetworkError',
   ]) {
     assert.equal(typeof remote[name], 'function', `remote.js 缺少导出 ${name}`)
+  }
+
+  const stream = await import('../lib/stream.js')
+  for (const name of ['readWorkspaceBaseline', 'encodeFrame', 'encodeTextFrame', 'decodeFrames']) {
+    assert.equal(typeof stream[name], 'function', `stream.js 缺少导出 ${name}`)
   }
 
   const rpc = await import('../lib/rpc.js')

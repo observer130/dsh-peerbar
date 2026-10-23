@@ -38,8 +38,5 @@
     "dsh-plugin",
     "deepseek-harness"
   ],
-  "license": "MIT",
-  "dependencies": {
-    "ws": "^8.22.0"
-  }
+  "license": "MIT"
 }

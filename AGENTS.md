@@ -74,6 +74,7 @@ lib/config.js    注册表与缓存读写（0600、原子替换）
 lib/guard.js     回环 + 同源栅栏（P0-5 的地基）
 lib/identity.js  origin 归一化、hostId、虚拟 ID、cwd → 工作区
 lib/remote.js    令牌换 cookie、RPC 信封、session/list、错误分类
+lib/stream.js    只读流通道：WS /api/remote.mux 取 workspace/follow 的归档集
 lib/probe.js     探活状态机与退避
 lib/peers.js     每 Host 的快照编排、调度与缓存
 lib/codes.js     错误码，前后端共用
@@ -153,6 +154,8 @@ node scripts/ui-check.mjs
 - 断言包含：工作区行 / 会话行数量、会话行缩进、远端标签、正文消息数、console error 必须为 0。
 - **改完必须自己看图**（Read 图片），确认视觉与原生一致，再决定下一步。
 - 宿主半改动要重启 `dev-server.sh`；客户端改动刷新页面即可（脚本每次新开页面）。
+- `dev-server.sh` 每次启动会把测试 profile 的 `node_modules/dsh-peerbar` 软链重指到**当前工作树**；
+  没有这一步，复制来的 profile 会去加载 `/home/nwj/Projects/dsh-peerbar`，自检绿了也没验证本次改动。
 
 ## 边界
 
