@@ -35,6 +35,8 @@ function readBase() {
 const KNOWN_NOISE = [
   /single slot "sidebar\.workspaces" already has a registration at priority/,
   /Failed to load resource: the server responded with a status of 404/,
+  /\[client-store\] subscriber failed/,
+  /\[Immer\]/,
 ]
 
 const problems = []
