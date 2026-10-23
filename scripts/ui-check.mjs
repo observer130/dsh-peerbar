@@ -201,7 +201,7 @@ try {
           return {
             messages: document.querySelectorAll('.dshp-msg').length,
             userBubbles: document.querySelectorAll('.vq-vBq_userRow').length,
-            toolCards: document.querySelectorAll('.etvktG_root').length,
+            toolCards: document.querySelectorAll('.O4lnUa_root').length,
             richContent: body ? body.querySelectorAll('table, pre, h1, h2, h3, ul, ol, blockquote').length : 0,
             firstToolWidth: rect ? Math.round(rect.width) : null,
           taskRows: document.querySelectorAll('.KXphHq_title').length,
@@ -228,7 +228,7 @@ try {
     if (panel.actionBars === 0) problems.push('消息没有动作条（FEkWtG_actions 为 0）')
     if (panel.toolCards > 0) {
       const card = await page.evaluate(() => {
-        const node = document.querySelector('.etvktG_root')
+        const node = document.querySelector('.O4lnUa_root')
         return node ? node.innerText.split('\n')[0] : null
       })
       first.toolCardTitle = card
