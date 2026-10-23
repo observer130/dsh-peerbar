@@ -231,9 +231,13 @@ try {
   }
 
   // 展开第一个远端组，最多试 4 条会话，取"有真人发言/富文本"的那条截图
+  // 注意：上面 P2 菜单断言可能已展开过，点第二下会收起——只在折叠时点
   const tagHandle = await page.$('.dshp-tag')
   if (tagHandle) {
-    await tagHandle.evaluate((node) => node.closest('.koUx-W_projectRow').click())
+    await tagHandle.evaluate((node) => {
+      const row = node.closest('.koUx-W_projectRow')
+      if (row && row.getAttribute('aria-expanded') !== 'true') row.click()
+    })
     await new Promise((resolve) => setTimeout(resolve, 600))
     await page.screenshot({ path: path.join(OUT, 'ui-2-remote-expanded.png') })
 
@@ -249,7 +253,8 @@ try {
     for (let group = 0; group < Math.min(groupCount, 3) && !foundBubble; group += 1) {
       await page.evaluate((index) => {
         const tags = document.querySelectorAll('.dshp-tag')
-        tags[index]?.closest('.koUx-W_projectRow')?.click()
+        const row = tags[index]?.closest('.koUx-W_projectRow')
+        if (row && row.getAttribute('aria-expanded') !== 'true') row.click()
       }, group)
       await new Promise((resolve) => setTimeout(resolve, 400))
       const rows = await page.evaluate((index) => {
