@@ -79,12 +79,22 @@ try {
         (node) => node.textContent.trim() === '未命名',
       ).length,
       menuButtons: document.querySelectorAll('.koUx-W_rowActions button').length,
+      // 原生行内 ⋯ 只给 aria，不给 title tooltip
+      sessionMenuAria: document.querySelector('.koUx-W_sessionRow .koUx-W_rowActions button')?.getAttribute('aria-label') ?? null,
+      projectMenuAria: document.querySelector('.koUx-W_projectRow .koUx-W_rowActions button')?.getAttribute('aria-label') ?? null,
+      sessionMenuTitle: document.querySelector('.koUx-W_sessionRow .koUx-W_rowActions button')?.getAttribute('title') ?? null,
       overflowLabel: document.querySelector('.hP3ldq_sessionOverflowButton')?.textContent?.trim() ?? null,
       // 原生 idle 行走 sidebar.session.row.leading 空槽，不画状态点
       idleDots: document.querySelectorAll('.koUx-W_sessionRow .koUx-W_slot [data-state="idle"]').length,
       idleSlotWidth: (() => {
         const slot = document.querySelector('.koUx-W_sessionRow .koUx-W_slot')
         return slot ? Math.round(slot.getBoundingClientRect().width) : null
+      })(),
+      // 原生行几何：padding-left 8px（顶层工作区 depth=0），标题距行左 8+16+4=28
+      sessionTitleOffset: (() => {
+        if (!session) return null
+        const title = session.querySelector('.koUx-W_title')
+        return title ? Math.round(title.getBoundingClientRect().left - session.getBoundingClientRect().left) : null
       })(),
       sessionPaddingLeft: session ? getComputedStyle(session).paddingLeft : null,
       treeHeight: tree ? tree.getBoundingClientRect().height : 0,
@@ -96,10 +106,25 @@ try {
   if (first.projectRows === 0) problems.push('侧栏没有任何工作区行（.koUx-W_projectRow 为 0）')
   if (first.sessionRows === 0) problems.push('侧栏没有任何会话行（.koUx-W_sessionRow 为 0）')
   if (first.remoteTags.length === 0) problems.push('侧栏没有远端 Host 标签（.dshp-tag）')
-  if (first.sessionPaddingLeft && Number.parseFloat(first.sessionPaddingLeft) < 20) {
-    problems.push(`会话行没有缩进（padding-left=${first.sessionPaddingLeft}）`)
+  // 原生 `--dsh-workspace-indent` 是 depth*12，顶层工作区下的会话是 0 → padding-left 8px，
+  // 标题距行左 8 + slot 16 + margin 4 = 28。
+  if (first.sessionPaddingLeft && first.sessionPaddingLeft !== '8px') {
+    problems.push(`会话行 padding-left 应为 8px（原生顶层 depth=0），实际 ${first.sessionPaddingLeft}`)
+  }
+  if (first.sessionTitleOffset !== null && first.sessionTitleOffset !== 28) {
+    problems.push(`会话标题距行左应为 28px（原生 8+16+4），实际 ${first.sessionTitleOffset}px`)
   }
   if (first.menuButtons === 0) problems.push('行内没有任何菜单按钮（.koUx-W_rowActions button 为 0）')
+  // 原生 blank 行只显示“当前选中”的那一条
+  if (first.blankRows > 1) problems.push(`blank 行最多 1 条（原生只显示当前选中的），实际 ${first.blankRows}`)
+  // aria 文案与原生一致：会话“名”的操作 / 工作区“名”的操作；且不挂 title
+  if (first.sessionMenuAria && !/^会话“.+”的操作$/.test(first.sessionMenuAria)) {
+    problems.push(`会话行 ⋯ 的 aria 应为「会话“名”的操作」，实际「${first.sessionMenuAria}」`)
+  }
+  if (first.projectMenuAria && !/^工作区“.+”的操作$/.test(first.projectMenuAria)) {
+    problems.push(`工作区行 ⋯ 的 aria 应为「工作区“名”的操作」，实际「${first.projectMenuAria}」`)
+  }
+  if (first.sessionMenuTitle !== null) problems.push('会话行 ⋯ 不应挂 title tooltip（原生只有 aria）')
   if (first.idleDots > 0) problems.push(`idle 行不该画状态点（实际 ${first.idleDots} 个），原生只有在途/完成态才画`)
   if (first.idleSlotWidth !== null && first.idleSlotWidth !== 16) {
     problems.push(`不画点后 slot 仍应占 16px（实际 ${first.idleSlotWidth}px）`)
