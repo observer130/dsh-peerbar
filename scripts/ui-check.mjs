@@ -161,6 +161,75 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 200))
   }
 
+  // 远端行管理（P2/P3）：远端会话行菜单五项 + hover 三按钮 + 远端工作区菜单
+  // 远端组默认折叠，先展开
+  await page.evaluate(() => {
+    const tag = document.querySelector('.dshp-tag')
+    const row = tag?.closest('.koUx-W_projectRow')
+    if (row && row.getAttribute('aria-expanded') !== 'true') row.click()
+  })
+  await new Promise((resolve) => setTimeout(resolve, 600))
+  const remoteMenu = await page.evaluate(() => {
+    const tag = document.querySelector('.dshp-tag')
+    const group = tag?.closest('.koUx-W_projectRow')?.parentElement
+    const row = group?.querySelector('.koUx-W_sessionRow')
+    const projectRow = tag?.closest('.koUx-W_projectRow')
+    return {
+      hasRemoteRow: Boolean(row),
+      hasRemoteProject: Boolean(projectRow),
+      remoteRowButtons: row ? row.querySelectorAll('.koUx-W_rowActions button').length : 0,
+      remoteProjectButtons: projectRow ? projectRow.querySelectorAll('.koUx-W_rowActions button').length : 0,
+    }
+  })
+  first.remoteRowButtons = remoteMenu.remoteRowButtons
+  if (!remoteMenu.hasRemoteRow) {
+    problems.push('远端组展开后没有会话行')
+  } else {
+    if (remoteMenu.remoteRowButtons < 3) {
+      problems.push(`远端会话行 hover 按钮不足 3 个（实际 ${remoteMenu.remoteRowButtons}）`)
+    }
+    // 打开远端会话行菜单
+    await page.evaluate(() => {
+      const tag = document.querySelector('.dshp-tag')
+      const group = tag?.closest('.koUx-W_projectRow')?.parentElement
+      const row = group?.querySelector('.koUx-W_sessionRow')
+      row?.querySelector('.koUx-W_rowActions button:last-child')?.click()
+    })
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    const remoteItems = await menuItemsOf()
+    await page.screenshot({ path: path.join(OUT, 'ui-7-remote-session-menu.png') })
+    first.remoteSessionMenuItems = remoteItems
+    for (const label of ['重命名', '分叉会话', '复制 Session ID']) {
+      if (!remoteItems.some((item) => item.startsWith(label))) {
+        problems.push(`远端会话菜单缺少「${label}」（P2 对齐本地）`)
+      }
+    }
+    const hasPin = remoteItems.some((item) => item.startsWith('置顶会话') || item.startsWith('取消置顶'))
+    const hasArchive = remoteItems.some((item) => item.startsWith('归档会话') || item.startsWith('取消归档'))
+    if (!hasPin) problems.push('远端会话菜单缺少置顶/取消置顶')
+    if (!hasArchive) problems.push('远端会话菜单缺少归档/取消归档')
+    await page.keyboard.press('Escape')
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+  if (remoteMenu.hasRemoteProject) {
+    await page.evaluate(() => {
+      const tag = document.querySelector('.dshp-tag')
+      const row = tag?.closest('.koUx-W_projectRow')
+      row?.querySelector('.koUx-W_rowActions button:first-child')?.click()
+    })
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    const remoteWsItems = await menuItemsOf()
+    await page.screenshot({ path: path.join(OUT, 'ui-8-remote-workspace-menu.png') })
+    first.remoteWorkspaceMenuItems = remoteWsItems
+    for (const label of ['重命名工作区', '删除工作区']) {
+      if (!remoteWsItems.some((item) => item.startsWith(label))) {
+        problems.push(`远端工作区菜单缺少「${label}」（P3）`)
+      }
+    }
+    await page.keyboard.press('Escape')
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+
   // 展开第一个远端组，最多试 4 条会话，取"有真人发言/富文本"的那条截图
   const tagHandle = await page.$('.dshp-tag')
   if (tagHandle) {
