@@ -489,6 +489,23 @@ try {
       /* 忽略 */
     }
   })
+  // 影子副本回归断言：点开远端会话前后，本机「未分组」行数不得增加
+  // （打开远端会话会往 useSessions 注入 __peerbar 行，绝不能渲染进本机侧栏；
+  // 排除标题「新会话」的当前 blank 行——它的显隐受 currentBlankId 影响会抖）
+  const countUngrouped = () =>
+    page.evaluate(() => {
+      for (const row of document.querySelectorAll('.koUx-W_projectRow')) {
+        const title = row.querySelector('.koUx-W_title')?.textContent.trim()
+        if (title === '未分组' || title === 'Ungrouped') {
+          return [...row.parentElement.querySelectorAll('.koUx-W_sessionRow')].filter((n) => {
+            const t = n.querySelector('.koUx-W_title')?.textContent.trim() ?? ''
+            return t !== '新会话' && t !== 'New session'
+          }).length
+        }
+      }
+      return 0
+    })
+  const ungroupedBefore = await countUngrouped()
   const plusClicked = await page.evaluate(() => {
     const projectRow = document.querySelector('[data-pb-target="1"]') ?? document.querySelector('.dshp-tag')?.closest('.koUx-W_projectRow')
     const button = projectRow?.querySelector('button[title="新会话"], button[title="新建会话"]')
@@ -516,6 +533,12 @@ try {
       const echoed = await page.evaluate(() => (document.body.innerText ?? '').includes('ZQVX'))
       if (!echoed) problems.push('composer 发送后没有出现消息气泡（P4 echo/append）')
       await page.screenshot({ path: path.join(OUT, 'ui-9-remote-chat.png') })
+      // 影子副本断言：打开远端会话后本机未分组不得多出行
+      const ungroupedAfter = await countUngrouped()
+      first.ungroupedShadow = { before: ungroupedBefore, after: ungroupedAfter }
+      if (ungroupedAfter > ungroupedBefore) {
+        problems.push(`本机「未分组」出现远端会话影子副本（${ungroupedBefore} → ${ungroupedAfter} 行）`)
+      }
       // 等远端真跑出回复（≤180s，High 推理档思考可超 2 分钟）：
       // 出现一个纯 ZQVX 的叶子文本节点即为回复
       let replied = false
