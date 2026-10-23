@@ -162,59 +162,85 @@ try {
   }
 
   // 远端行管理（P2/P3）：远端会话行菜单五项 + hover 三按钮 + 远端工作区菜单
-  // 远端组默认折叠，先展开
-  await page.evaluate(() => {
-    const tag = document.querySelector('.dshp-tag')
-    const row = tag?.closest('.koUx-W_projectRow')
-    if (row && row.getAttribute('aria-expanded') !== 'true') row.click()
-  })
-  await new Promise((resolve) => setTimeout(resolve, 600))
-  const remoteMenu = await page.evaluate(() => {
-    const tag = document.querySelector('.dshp-tag')
-    const group = tag?.closest('.koUx-W_projectRow')?.parentElement
-    const row = group?.querySelector('.koUx-W_sessionRow')
-    const projectRow = tag?.closest('.koUx-W_projectRow')
-    return {
-      hasRemoteRow: Boolean(row),
-      hasRemoteProject: Boolean(projectRow),
-      remoteRowButtons: row ? row.querySelectorAll('.koUx-W_rowActions button').length : 0,
-      remoteProjectButtons: projectRow ? projectRow.querySelectorAll('.koUx-W_rowActions button').length : 0,
-    }
-  })
-  first.remoteRowButtons = remoteMenu.remoteRowButtons
-  if (!remoteMenu.hasRemoteRow) {
-    problems.push('远端组展开后没有会话行')
-  } else {
-    if (remoteMenu.remoteRowButtons < 3) {
-      problems.push(`远端会话行 hover 按钮不足 3 个（实际 ${remoteMenu.remoteRowButtons}）`)
-    }
-    // 打开远端会话行菜单
-    await page.evaluate(() => {
-      const tag = document.querySelector('.dshp-tag')
-      const group = tag?.closest('.koUx-W_projectRow')?.parentElement
-      const row = group?.querySelector('.koUx-W_sessionRow')
-      row?.querySelector('.koUx-W_rowActions button:last-child')?.click()
-    })
-    await new Promise((resolve) => setTimeout(resolve, 500))
-    const remoteItems = await menuItemsOf()
-    await page.screenshot({ path: path.join(OUT, 'ui-7-remote-session-menu.png') })
-    first.remoteSessionMenuItems = remoteItems
-    for (const label of ['重命名', '分叉会话', '复制 Session ID']) {
-      if (!remoteItems.some((item) => item.startsWith(label))) {
-        problems.push(`远端会话菜单缺少「${label}」（P2 对齐本地）`)
+  // 目标组按 /state 挑选：第一个「有 workspaceId 且有可见会话行」的远端组
+  // （避免打到全归档/全空白的退化组——归档过滤后行数为 0，断言会空转）
+  const targetWs = await page.evaluate(async () => {
+    const res = await fetch('/dsh-peerbar/api/state')
+    const state = await res.json()
+    for (const host of state.hosts ?? []) {
+      if (host.status !== 'online') continue
+      for (const ws of host.workspaces ?? []) {
+        const visible = (ws.sessions ?? []).filter((s) => !s.blank && s.archived !== true)
+        if (ws.workspaceId && visible.length > 0) {
+          return { name: ws.name, hostId: host.hostId, visible: visible.length }
+        }
       }
     }
-    const hasPin = remoteItems.some((item) => item.startsWith('置顶会话') || item.startsWith('取消置顶'))
-    const hasArchive = remoteItems.some((item) => item.startsWith('归档会话') || item.startsWith('取消归档'))
-    if (!hasPin) problems.push('远端会话菜单缺少置顶/取消置顶')
-    if (!hasArchive) problems.push('远端会话菜单缺少归档/取消归档')
-    await page.keyboard.press('Escape')
-    await new Promise((resolve) => setTimeout(resolve, 200))
-  }
-  if (remoteMenu.hasRemoteProject) {
+    return null
+  })
+  first.targetWorkspace = targetWs?.name ?? null
+  const marked = await page.evaluate((name) => {
+    if (!name) return false
+    for (const row of document.querySelectorAll('.koUx-W_projectRow')) {
+      const tag = row.querySelector('.dshp-tag')
+      const title = row.querySelector('.koUx-W_title')
+      if (tag && title && title.textContent.trim() === name) {
+        row.setAttribute('data-pb-target', '1')
+        return true
+      }
+    }
+    return false
+  }, targetWs?.name)
+  if (!marked) {
+    problems.push('没有找到带 workspaceId 的远端组（baseline/registry 缺失）')
+  } else {
+    // 展开目标组
     await page.evaluate(() => {
-      const tag = document.querySelector('.dshp-tag')
-      const row = tag?.closest('.koUx-W_projectRow')
+      const row = document.querySelector('[data-pb-target="1"]')
+      if (row && row.getAttribute('aria-expanded') !== 'true') row.click()
+    })
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    const remoteMenu = await page.evaluate(() => {
+      const projectRow = document.querySelector('[data-pb-target="1"]')
+      const group = projectRow?.parentElement
+      const row = group?.querySelector('.koUx-W_sessionRow')
+      return {
+        hasRemoteRow: Boolean(row),
+        remoteRowButtons: row ? row.querySelectorAll('.koUx-W_rowActions button').length : 0,
+      }
+    })
+    first.remoteRowButtons = remoteMenu.remoteRowButtons
+    if (!remoteMenu.hasRemoteRow) {
+      problems.push('远端目标组展开后没有会话行')
+    } else {
+      if (remoteMenu.remoteRowButtons < 3) {
+        problems.push(`远端会话行 hover 按钮不足 3 个（实际 ${remoteMenu.remoteRowButtons}）`)
+      }
+      // 打开远端会话行菜单
+      await page.evaluate(() => {
+        const projectRow = document.querySelector('[data-pb-target="1"]')
+        const row = projectRow?.parentElement?.querySelector('.koUx-W_sessionRow')
+        row?.querySelector('.koUx-W_rowActions button:last-child')?.click()
+      })
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      const remoteItems = await menuItemsOf()
+      await page.screenshot({ path: path.join(OUT, 'ui-7-remote-session-menu.png') })
+      first.remoteSessionMenuItems = remoteItems
+      for (const label of ['重命名', '分叉会话', '复制 Session ID']) {
+        if (!remoteItems.some((item) => item.startsWith(label))) {
+          problems.push(`远端会话菜单缺少「${label}」（P2 对齐本地）`)
+        }
+      }
+      const hasPin = remoteItems.some((item) => item.startsWith('置顶会话') || item.startsWith('取消置顶'))
+      const hasArchive = remoteItems.some((item) => item.startsWith('归档会话') || item.startsWith('取消归档'))
+      if (!hasPin) problems.push('远端会话菜单缺少置顶/取消置顶')
+      if (!hasArchive) problems.push('远端会话菜单缺少归档/取消归档')
+      await page.keyboard.press('Escape')
+      await new Promise((resolve) => setTimeout(resolve, 200))
+    }
+    // 远端工作区菜单
+    await page.evaluate(() => {
+      const row = document.querySelector('[data-pb-target="1"]')
       row?.querySelector('.koUx-W_rowActions button:first-child')?.click()
     })
     await new Promise((resolve) => setTimeout(resolve, 500))
@@ -230,9 +256,9 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 200))
   }
 
-  // 展开第一个远端组，最多试 4 条会话，取"有真人发言/富文本"的那条截图
-  // 注意：上面 P2 菜单断言可能已展开过，点第二下会收起——只在折叠时点
-  const tagHandle = await page.$('.dshp-tag')
+  // 展开目标远端组，最多试 4 条会话，取"有真人发言/富文本"的那条截图
+  // 注意：P2 菜单断言可能已展开过，点第二下会收起——只在折叠时点
+  const tagHandle = await page.$('[data-pb-target="1"] .dshp-tag') ?? await page.$('.dshp-tag')
   if (tagHandle) {
     await tagHandle.evaluate((node) => {
       const row = node.closest('.koUx-W_projectRow')
@@ -242,10 +268,11 @@ try {
     await page.screenshot({ path: path.join(OUT, 'ui-2-remote-expanded.png') })
 
     const rows = await page.evaluate(() => {
-      const group = document.querySelector('.dshp-tag')?.closest('.koUx-W_projectRow')?.parentElement
+      const target = document.querySelector('[data-pb-target="1"]') ?? document.querySelector('.dshp-tag')?.closest('.koUx-W_projectRow')
+      const group = target?.parentElement
       return group ? group.querySelectorAll('.koUx-W_sessionRow').length : 0
     })
-    if (rows === 0) problems.push('远端组展开后没有会话行可点')
+    if (rows === 0) problems.push('远端目标组展开后没有会话行可点')
 
     let panel = { chatNodes: 0, nativeTool: 0, foldRows: 0, actionBars: 0, customPanel: 0, preview: '' }
     const groupCount = await page.evaluate(() => document.querySelectorAll('.dshp-tag').length)
@@ -293,6 +320,115 @@ try {
     if (panel.foldRows === 0) problems.push('原生会话没有折叠行（过程组）')
     if (panel.customPanel > 0) problems.push('回退到了自绘面板，原生渲染未生效')
     if (panel.actionBars === 0) problems.push('原生消息没有动作条')
+  }
+
+  // P4/P6 浏览器级：远端新建会话 → composer 发消息 → 远端真跑 → 模型座可切
+  // （用「+」新建的测试会话，不污染真实会话；结束后归档清理）
+  // 门禁：必须确认 session/create 真的发生了（捕获到返回的 sessionId）才允许打字，
+  // 否则会把消息打进已打开的真实会话（事故教训）。
+  let testSessionId = null
+  let testHostId = null
+  page.on('response', async (response) => {
+    try {
+      const url = response.url()
+      if (!url.includes('/rpc')) return
+      const hostMatch = url.match(/\/hosts\/([^/]+)\/rpc/)
+      const payload = await response.json()
+      if (payload?.value?.sessionId && hostMatch) {
+        testSessionId = payload.value.sessionId
+        testHostId = decodeURIComponent(hostMatch[1])
+      }
+    } catch {
+      /* 忽略 */
+    }
+  })
+  const plusClicked = await page.evaluate(() => {
+    const projectRow = document.querySelector('[data-pb-target="1"]') ?? document.querySelector('.dshp-tag')?.closest('.koUx-W_projectRow')
+    const button = projectRow?.querySelector('button[title="新建会话"]')
+    if (!button) return false
+    button.click()
+    return true
+  })
+  if (!plusClicked) {
+    problems.push('远端工作区行没有「新建会话」按钮（P3）')
+  } else {
+    // 等 session/create 的响应（≤5s）
+    for (let i = 0; i < 10 && !testSessionId; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 500))
+    }
+    if (!testSessionId) {
+      problems.push('「新建会话」没有真正创建远端会话（P3 session/create）')
+    } else {
+      await page.waitForSelector('div.B2HNUa_input[role="textbox"]', { timeout: 10000 })
+      await new Promise((resolve) => setTimeout(resolve, 800))
+      // 发一条带唯一标记的 prompt（回复应为纯标记文本）
+      await page.click('div.B2HNUa_input[role="textbox"]')
+      await page.keyboard.type('请只回复四个字母：ZQVX，不要任何其他内容')
+      await page.keyboard.press('Enter')
+      await new Promise((resolve) => setTimeout(resolve, 1500))
+      const echoed = await page.evaluate(() => (document.body.innerText ?? '').includes('ZQVX'))
+      if (!echoed) problems.push('composer 发送后没有出现消息气泡（P4 echo/append）')
+      await page.screenshot({ path: path.join(OUT, 'ui-9-remote-chat.png') })
+      // 等远端真跑出回复（≤90s）：出现一个纯 ZQVX 的叶子文本节点即为回复
+      let replied = false
+      for (let i = 0; i < 45; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 2000))
+        replied = await page.evaluate(() =>
+          [...document.querySelectorAll('p, span, div')].some(
+            (n) => n.children.length === 0 && n.textContent.trim() === 'ZQVX',
+          ),
+        )
+        if (replied) break
+      }
+      first.remoteReply = replied
+      if (!replied) problems.push('远端回复未在 90s 内出现（P4 续聊链路）')
+      await page.screenshot({ path: path.join(OUT, 'ui-9b-remote-reply.png') })
+
+      // P6：模型座可打开并列出模型
+      const seatClicked = await page.evaluate(() => {
+        const seat = document.querySelector('button.YtWLma_trigger')
+        if (!seat) return false
+        seat.click()
+        return true
+      })
+      if (!seatClicked) problems.push('模型座按钮不存在（P6）')
+      else {
+        await new Promise((resolve) => setTimeout(resolve, 800))
+        const modelMenu = await page.evaluate(() => {
+          const items = [
+            ...document.querySelectorAll('[role="menuitem"], [role="option"]'),
+          ].map((n) => n.textContent.trim()).filter((t) => t && t.length < 60)
+          const layers = [...document.querySelectorAll('[role="menu"], [role="listbox"], [role="dialog"]')]
+            .map((n) => n.innerText.trim()).filter(Boolean)
+          return { items: items.slice(0, 10), layerText: layers.join(' | ').slice(0, 200) }
+        })
+        first.modelMenuItems = modelMenu.items
+        first.modelMenuLayer = modelMenu.layerText
+        await page.screenshot({ path: path.join(OUT, 'ui-10-model-seat.png') })
+        if (modelMenu.items.length === 0 && !modelMenu.layerText) {
+          problems.push('模型座点开后没有模型条目（P6 modelCatalog 路由）')
+        }
+        await page.keyboard.press('Escape')
+      }
+    }
+
+    // 清理：归档测试会话（P2 能力顺带回归）
+    if (testSessionId && testHostId) {
+      await page.evaluate(
+        async ([hostId, sessionId]) => {
+          await fetch(`/dsh-peerbar/api/hosts/${encodeURIComponent(hostId)}/rpc`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json', 'x-dsh-peerbar-action': '1' },
+            body: JSON.stringify({ endpoint: 'workspace/archiveSession', args: { request: { sessionId, stopActivity: true } } }),
+          })
+        },
+        [testHostId, testSessionId],
+      )
+      first.testSessionCleanup = true
+    } else {
+      first.testSessionCleanup = false
+    }
   }
 
   const knownWarnings = consoleErrors.filter((text) => KNOWN_NOISE.some((pattern) => pattern.test(text)))
