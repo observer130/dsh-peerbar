@@ -83,6 +83,14 @@ try {
       sessionMenuAria: document.querySelector('.koUx-W_sessionRow .koUx-W_rowActions button')?.getAttribute('aria-label') ?? null,
       projectMenuAria: document.querySelector('.koUx-W_projectRow .koUx-W_rowActions button')?.getAttribute('aria-label') ?? null,
       sessionMenuTitle: document.querySelector('.koUx-W_sessionRow .koUx-W_rowActions button')?.getAttribute('title') ?? null,
+      // 原生 ProjectRowItem：当前会话所在且展开的工作区，文件夹带 koUx-W_folderActive
+      folderActive: document.querySelectorAll('.koUx-W_projectRow .koUx-W_folderActive').length,
+      selectedRowActiveFolder: (() => {
+        const selected = document.querySelector('.koUx-W_sessionRow.koUx-W_selected')
+        if (!selected) return null
+        const group = selected.parentElement?.parentElement
+        return Boolean(group?.querySelector('.koUx-W_projectRow .koUx-W_folderActive'))
+      })(),
       overflowLabel: document.querySelector('.hP3ldq_sessionOverflowButton')?.textContent?.trim() ?? null,
       // 原生 idle 行走 sidebar.session.row.leading 空槽，不画状态点
       idleDots: document.querySelectorAll('.koUx-W_sessionRow .koUx-W_slot [data-state="idle"]').length,
@@ -125,6 +133,11 @@ try {
     problems.push(`工作区行 ⋯ 的 aria 应为「工作区“名”的操作」，实际「${first.projectMenuAria}」`)
   }
   if (first.sessionMenuTitle !== null) problems.push('会话行 ⋯ 不应挂 title tooltip（原生只有 aria）')
+  // 同一时刻只应有一个“当前工作区”，且它必须包含选中的会话
+  if (first.folderActive > 1) problems.push(`当前工作区高亮最多 1 个，实际 ${first.folderActive}`)
+  if (first.selectedRowActiveFolder === false) {
+    problems.push('选中的会话所在工作区的文件夹没有高亮（koUx-W_folderActive）')
+  }
   if (first.idleDots > 0) problems.push(`idle 行不该画状态点（实际 ${first.idleDots} 个），原生只有在途/完成态才画`)
   if (first.idleSlotWidth !== null && first.idleSlotWidth !== 16) {
     problems.push(`不画点后 slot 仍应占 16px（实际 ${first.idleSlotWidth}px）`)
