@@ -207,6 +207,7 @@ try {
           taskRows: document.querySelectorAll('.KXphHq_title').length,
           fileCards: document.querySelectorAll('.vq-vBq_fileCard').length,
           composer: document.querySelectorAll('.if816a_composerSeat').length,
+          actionBars: document.querySelectorAll('.FEkWtG_actions').length,
             preview: (body?.innerText ?? '').slice(0, 120),
           }
         })
@@ -224,6 +225,7 @@ try {
 
     if (panel.messages === 0 && panel.userBubbles === 0) problems.push('正文面板没有任何消息')
     if (panel.composer === 0) problems.push('底部没有 composer 容器')
+    if (panel.actionBars === 0) problems.push('消息没有动作条（FEkWtG_actions 为 0）')
     if (panel.firstToolWidth && panel.firstToolWidth > 200) {
       problems.push(`工具调用没有收成胶囊（首个体宽 ${panel.firstToolWidth}px）`)
     }
