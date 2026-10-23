@@ -29,5 +29,19 @@ if [ ! -d "$HOME_DIR/profiles/$PROFILE" ]; then
   cp -r "$HOME_DIR/profiles/desktop" "$HOME_DIR/profiles/$PROFILE"
 fi
 
+# 复制过来的 profile 里，dsh-peerbar 是指向别处 checkout 的软链（比如
+# /home/nwj/Projects/dsh-peerbar）。不重指就会「自检绿了但验的不是本次改动」，
+# 所以每次启动都把它钉到当前工作树。
+LINK="$HOME_DIR/profiles/$PROFILE/node_modules/dsh-peerbar"
+if [ -L "$LINK" ] || [ -e "$LINK" ]; then
+  CURRENT="$(readlink -f "$LINK" 2>/dev/null || true)"
+  if [ "$CURRENT" != "$ROOT" ]; then
+    echo "把测试 profile 的 dsh-peerbar 重指到当前工作树：$ROOT" >&2
+    ln -sfn "$ROOT" "$LINK"
+  fi
+else
+  ln -sfn "$ROOT" "$LINK"
+fi
+
 cd "$ROOT"
 exec "$NODE" "$DSH_BIN" --profile "$PROFILE" --host 127.0.0.1 --port "$PORT" --no-open

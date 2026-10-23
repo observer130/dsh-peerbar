@@ -73,3 +73,43 @@ test('groupSessions 把缺失 cwd 归到 (unknown)', () => {
   assert.equal(groups[0].cwd, '(unknown)')
   assert.equal(groups[0].name, '(unknown)')
 })
+
+test('groupSessions 丢掉子代理会话（origin=subagent）', () => {
+  const items = [
+    { sessionId: 'parent', cwd: '/a', updatedAt: 20 },
+    {
+      sessionId: 'child',
+      cwd: '/a',
+      updatedAt: 30,
+      origin: 'subagent',
+      parentSessionId: 'parent',
+      projections: { values: { title: '子任务' } },
+    },
+  ]
+  const groups = groupSessions('h_1', items)
+  assert.equal(groups.length, 1)
+  assert.deepEqual(
+    groups[0].sessions.map((session) => session.rawId),
+    ['parent'],
+  )
+})
+
+test('groupSessions 按传入归档集打 archived 标记', () => {
+  const items = [
+    { sessionId: 's1', cwd: '/a', updatedAt: 20 },
+    { sessionId: 's2', cwd: '/a', updatedAt: 10 },
+  ]
+  const groups = groupSessions('h_1', items, { archivedSessionIds: ['s2'] })
+  assert.deepEqual(
+    groups[0].sessions.map((session) => [session.rawId, session.archived]),
+    [
+      ['s1', false],
+      ['s2', true],
+    ],
+  )
+  const none = groupSessions('h_1', items)
+  assert.deepEqual(
+    none[0].sessions.map((session) => session.archived),
+    [false, false],
+  )
+})
