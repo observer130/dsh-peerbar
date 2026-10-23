@@ -83,7 +83,21 @@ try {
       sessionMenuAria: document.querySelector('.koUx-W_sessionRow .koUx-W_rowActions button')?.getAttribute('aria-label') ?? null,
       projectMenuAria: document.querySelector('.koUx-W_projectRow .koUx-W_rowActions button')?.getAttribute('aria-label') ?? null,
       sessionMenuTitle: document.querySelector('.koUx-W_sessionRow .koUx-W_rowActions button')?.getAttribute('title') ?? null,
-      // 原生 ProjectRowItem：当前会话所在且展开的工作区，文件夹带 koUx-W_folderActive
+      // 原生分组标题栏：36px 高、标题 14px、搜索按钮 28×28
+      headerHeight: (() => {
+        const el = document.querySelector('.hP3ldq_sectionHeader')
+        return el ? Math.round(el.getBoundingClientRect().height) : null
+      })(),
+      sectionLabelSize: (() => {
+        const el = document.querySelector('.hP3ldq_sectionLabel')
+        return el ? getComputedStyle(el).fontSize : null
+      })(),
+      searchButton: (() => {
+        const el = document.querySelector('.hP3ldq_searchButton')
+        if (!el) return null
+        const r = el.getBoundingClientRect()
+        return `${Math.round(r.width)}x${Math.round(r.height)}`
+      })(),
       folderActive: document.querySelectorAll('.koUx-W_projectRow .koUx-W_folderActive').length,
       selectedRowActiveFolder: (() => {
         const selected = document.querySelector('.koUx-W_sessionRow.koUx-W_selected')
@@ -137,6 +151,16 @@ try {
   if (first.folderActive > 1) problems.push(`当前工作区高亮最多 1 个，实际 ${first.folderActive}`)
   if (first.selectedRowActiveFolder === false) {
     problems.push('选中的会话所在工作区的文件夹没有高亮（koUx-W_folderActive）')
+  }
+  // 标题栏几何对齐原生（36px / 14px / 28×28）
+  if (first.headerHeight !== null && first.headerHeight !== 36) {
+    problems.push(`分组标题栏高度应为 36px（实际 ${first.headerHeight}）`)
+  }
+  if (first.sectionLabelSize && first.sectionLabelSize !== '14px') {
+    problems.push(`「工作区」标题字号应为 14px（实际 ${first.sectionLabelSize}）`)
+  }
+  if (first.searchButton && first.searchButton !== '28x28') {
+    problems.push(`搜索按钮应为 28×28（实际 ${first.searchButton}）`)
   }
   if (first.idleDots > 0) problems.push(`idle 行不该画状态点（实际 ${first.idleDots} 个），原生只有在途/完成态才画`)
   if (first.idleSlotWidth !== null && first.idleSlotWidth !== 16) {
