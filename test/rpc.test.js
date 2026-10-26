@@ -12,6 +12,7 @@ test('白名单放行已知端点', () => {
     'session/fork',
     'session/selectModel',
     'session/modelCatalog',
+    'session/attachment', // 只读：远端消息里的图片按 attachmentId 取字节
     'workspace/rename',
     'workspace/delete',
     'workspace/archiveSession',

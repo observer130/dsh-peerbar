@@ -194,7 +194,13 @@ test('白名单里的每个端点都要有明确归属（回写 or 已知无需�
     'workspace/insertSessionBefore',
   ])
   // 明确不需要回写的：内容类（走会话绑定）与只读端点
-  const byDesign = new Set(['session/updateQueue', 'session/selectModel', 'session/modelCatalog', 'directoryPicker/list'])
+  const byDesign = new Set([
+    'session/updateQueue',
+    'session/selectModel',
+    'session/modelCatalog',
+    'session/attachment',
+    'directoryPicker/list',
+  ])
   const unaccounted = [...RPC_ALLOWLIST].filter((endpoint) => !handled.has(endpoint) && !byDesign.has(endpoint))
   assert.deepEqual(unaccounted, [], `这些端点在 applyEchoToWorkspaces 里没有归属：${unaccounted.join(', ')}`)
 })
