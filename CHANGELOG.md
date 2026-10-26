@@ -11,6 +11,9 @@
 - **工作区信息退化可见**：baseline 读取失败时，侧栏在组行给出 ⓘ（含原因），不再「菜单凭空消失」
 - **远端文件引用拦截**：远端会话里点文件只提示「在远端某主机上」，不会在本机打开同名文件
 - 文档与元数据对齐实现：README 去掉「只读」描述，补能力清单与已知限制
+- **兼容 `0.2.1-rc.3`**：升级后复验通过——18 个白名单端点、`session/page` 的
+  `beforeSeq`/`turnWindow`、`sidebarRight.openResource`、`ctx.remote.session.modelCatalog`、
+  `sidebar.workspaces` 的 `directoryFlow` 子座位全部仍在；58 单测 + ui-check 全绿
 
 ## 0.4.0 — v4 远端交互（未单独发版）
 
