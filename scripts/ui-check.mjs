@@ -42,11 +42,20 @@ const KNOWN_NOISE = [
 const problems = []
 const warnings = []
 const base = readBase()
-const browser = await puppeteer.launch({
-  executablePath: '/usr/bin/google-chrome-stable',
-  headless: 'new',
-  args: ['--no-sandbox', '--disable-gpu', '--hide-scrollbars', '--font-render-hinting=none'],
-})
+// `--cdp http://127.0.0.1:9224` 连一个已在跑的 Chrome：
+// 代理沙箱把 RLIMIT_AS 卡在 4GB，直接 launch 会 core dump；
+// 用 `systemd-run --user ... google-chrome-stable --headless=new
+// --remote-debugging-port=9224` 起浏览器再连即可（脚本结尾不能 close）。
+const cdpIndex = process.argv.indexOf('--cdp')
+const cdpUrl = cdpIndex !== -1 ? process.argv[cdpIndex + 1] : null
+const browser = cdpUrl
+  ? await puppeteer.connect({ browserURL: cdpUrl, defaultViewport: null })
+  : await puppeteer.launch({
+      executablePath: '/usr/bin/google-chrome-stable',
+      headless: 'new',
+      args: ['--no-sandbox', '--disable-gpu', '--hide-scrollbars', '--font-render-hinting=none'],
+    })
+const usingCdp = Boolean(cdpUrl)
 
 try {
   const page = await browser.newPage()
@@ -621,5 +630,7 @@ try {
     console.log('\n全部断言通过')
   }
 } finally {
-  await browser.close()
+  // CDP 模式下不能 close：会把外部那条浏览器关掉，下次连不上
+  if (usingCdp) await browser.disconnect()
+  else await browser.close()
 }
