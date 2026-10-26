@@ -16,6 +16,7 @@ test('白名单放行已知端点', () => {
     'workspace/delete',
     'workspace/archiveSession',
     'workspace/pinSession',
+    'directoryPicker/list',
   ]) {
     assert.equal(isAllowedRpc(endpoint), true, endpoint + ' 应放行')
   }
@@ -30,6 +31,7 @@ test('白名单拒绝流式与未知端点', () => {
     'session/page', // 读走 /session 路由，不开双通道
     'workspace/initializeDefault',
     'directoryPicker/pick',
+    'directoryPicker/createDirectory',
     'settings/mutate',
     'credentials/set',
     '',
@@ -44,6 +46,9 @@ test('白名单不含读端点与危险端点', () => {
   assert.ok(!RPC_ALLOWLIST.has('session/list'))
   assert.ok(!RPC_ALLOWLIST.has('workspace/follow'))
   assert.ok(!RPC_ALLOWLIST.has('settings/replace'))
+  // 目录浏览只放行只读 list：pick 会弹远端桌面对话框，createDirectory 是写操作
+  assert.ok(!RPC_ALLOWLIST.has('directoryPicker/pick'))
+  assert.ok(!RPC_ALLOWLIST.has('directoryPicker/createDirectory'))
 })
 
 test('isPlainArgs 只收普通对象', () => {
