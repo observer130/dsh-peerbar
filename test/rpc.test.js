@@ -19,6 +19,7 @@ test('白名单放行已知端点', () => {
     'workspace/pinSession',
     'directoryPicker/list',
     'fileUploads/upload', // 远端非图片附件上传（lookup 参数 agentId）
+    'session/attachment',
   ]) {
     assert.equal(isAllowedRpc(endpoint), true, endpoint + ' 应放行')
   }
