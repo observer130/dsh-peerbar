@@ -20,6 +20,11 @@ test('白名单放行已知端点', () => {
     'directoryPicker/list',
     'fileUploads/upload', // 远端非图片附件上传（lookup 参数 agentId）
     'session/attachment',
+    'commands/list', // T4 远端斜杠命令
+    'commands/execute',
+    'workspaceFiles/list', // T17 远端文件面板（只读）
+    'workspaceFiles/read',
+    'workspaceFiles/stat',
   ]) {
     assert.equal(isAllowedRpc(endpoint), true, endpoint + ' 应放行')
   }
