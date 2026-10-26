@@ -200,6 +200,8 @@ test('白名单里的每个端点都要有明确归属（回写 or 已知无需�
     'session/modelCatalog',
     'session/attachment',
     'directoryPicker/list',
+    // 上传只产生 receiptId，侧栏没有可见状态变化
+    'fileUploads/upload',
   ])
   const unaccounted = [...RPC_ALLOWLIST].filter((endpoint) => !handled.has(endpoint) && !byDesign.has(endpoint))
   assert.deepEqual(unaccounted, [], `这些端点在 applyEchoToWorkspaces 里没有归属：${unaccounted.join(', ')}`)
