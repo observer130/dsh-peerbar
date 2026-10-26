@@ -74,7 +74,7 @@ test('groupSessions 把缺失 cwd 归到 (unknown)', () => {
   assert.equal(groups[0].name, '(unknown)')
 })
 
-test('groupSessions 带 registry：workspaceId/archived/pinned 与手工序', () => {
+test('groupSessions 带 registry：注册表驱动分组/改名标题/未分组桶/手工序', () => {
   const registry = {
     items: [
       {
@@ -83,6 +83,12 @@ test('groupSessions 带 registry：workspaceId/archived/pinned 与手工序', ()
         title: '改过名的工作区',
         sessionIds: ['s2', 's1'],
       },
+      {
+        workspaceId: 'ws-empty',
+        path: '/empty',
+        title: '还没有会话的工作区',
+        sessionIds: [],
+      },
     ],
     archivedSessionIds: ['s1'],
     pinnedSessionIds: ['s2'],
@@ -90,19 +96,28 @@ test('groupSessions 带 registry：workspaceId/archived/pinned 与手工序', ()
   const items = [
     { sessionId: 's1', cwd: '/a', updatedAt: 10, projections: { values: { title: '一' } } },
     { sessionId: 's2', cwd: '/a', updatedAt: 30, projections: { values: { title: '二' } } },
-    { sessionId: 's3', cwd: '/b', updatedAt: 50, projections: { values: { title: '三' } } },
+    // 未归属任何注册工作区 → 未分组桶（不再按 cwd 造伪工作区）
+    { sessionId: 's3', cwd: '/home/loose', updatedAt: 50, projections: { values: { title: '三' } } },
   ]
   const groups = groupSessions('h_1', items, registry)
-  // /b 组无 registry → workspaceId 为 null，行为退回 cwd 合成
-  const gb = groups.find((g) => g.cwd === '/b')
-  assert.equal(gb.workspaceId, null)
-  assert.equal(gb.sessions[0].archived, false)
-  // /a 组带真实 workspaceId，s2 手工序在前（updatedAt 反序被压过）
-  const ga = groups.find((g) => g.cwd === '/a')
-  assert.equal(ga.workspaceId, 'ws-real-1')
+
+  // 注册工作区全部出组（含 0 会话的空组），组名用 registry title
+  const ga = groups.find((g) => g.workspaceId === 'ws-real-1')
+  assert.equal(ga.name, '改过名的工作区')
   assert.deepEqual(ga.sessions.map((s) => s.rawId), ['s2', 's1'])
   assert.equal(ga.sessions[0].pinned, true)
   assert.equal(ga.sessions[1].archived, true)
+  const gEmpty = groups.find((g) => g.workspaceId === 'ws-empty')
+  assert.ok(gEmpty, '没有会话的注册工作区也要出组')
+  assert.equal(gEmpty.sessions.length, 0)
+
+  // 未归属会话进未分组桶：workspaceId 为 null、ungrouped 标记、不按 cwd 分组
+  const bucket = groups.find((g) => g.ungrouped)
+  assert.ok(bucket, '未归属会话应进未分组桶')
+  assert.equal(bucket.workspaceId, null)
+  assert.equal(bucket.name, null)
+  assert.deepEqual(bucket.sessions.map((s) => s.rawId), ['s3'])
+  assert.equal(groups.filter((g) => g.cwd === '/home/loose').length, 0)
 })
 
 test('groupSessions 无 registry 时 archived/pinned 全 false', () => {
