@@ -19,6 +19,7 @@ test('宿主半模块可被真实导入，导出齐全', async () => {
     'callRpc',
     'listSessions',
     'clampLimit',
+    'buildPageRequest',
     'readRawPage',
     'renameRemoteSession',
     'probePage',
