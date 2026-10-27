@@ -4,6 +4,9 @@ node_modules/
 # 本地 agent 工作区（记忆、离线文档副本等），不入库
 .workbuddy/
 
+# 开发文档（计划/待办/方案/spike）只保留在本地，不推远程
+docs/
+
 # 日志与临时产物
 *.log
 *.tgz
