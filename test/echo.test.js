@@ -209,6 +209,10 @@ test('白名单里的每个端点都要有明确归属（回写 or 已知无需�
     'workspaceFiles/list',
     'workspaceFiles/read',
     'workspaceFiles/stat',
+    // 「@」/skill 候选源：只读
+    'fileReferences/list',
+    'sessionReferenceResolver/candidates',
+    'skills/list',
   ])
   const unaccounted = [...RPC_ALLOWLIST].filter((endpoint) => !handled.has(endpoint) && !byDesign.has(endpoint))
   assert.deepEqual(unaccounted, [], `这些端点在 applyEchoToWorkspaces 里没有归属：${unaccounted.join(', ')}`)

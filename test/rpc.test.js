@@ -25,6 +25,9 @@ test('白名单放行已知端点', () => {
     'workspaceFiles/list', // T17 远端文件面板（只读）
     'workspaceFiles/read',
     'workspaceFiles/stat',
+    'fileReferences/list', // 「@」补全
+    'sessionReferenceResolver/candidates',
+    'skills/list',
   ]) {
     assert.equal(isAllowedRpc(endpoint), true, endpoint + ' 应放行')
   }
