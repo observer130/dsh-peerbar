@@ -5,14 +5,15 @@
 ## 0.9.0 — 远端文本预览与定时任务（2026-10-28）
 
 - **文档预览**：远端会话里的文件链接不再被拦成提示，直接打开右侧栏预览；
-  Markdown/代码/文本经 `workspaceFiles/read` 代理渲染。图片/PDF/Office 需要
-  multipart 二进制载体，当前显式提示暂不支持（不静默读本机同名文件）
+  Markdown/代码/文本走 `workspaceFiles/read`，图片/PDF 走 `readBytes`
+  （宿主半解析 multipart → base64 → 浏览器还原 Uint8Array）。Office 转换
+  显式提示暂不支持，不静默读本机同名文件
 - **定时任务**：宿主半新增 `GET /dsh-peerbar/api/schedule`，把各在线 Host 的
   `schedule/catalog` 合成一份并标注归属；客户端 `schedule/catalog` 走合成结果，
   `list/history/update/delete` 在会话未打开时按 sessionId 定位 Host
 - **验证**：nv50 上让远端模型创建提醒「喝水」→「自动化任务」页列出任务，
   会话页头「1 个提醒」打开的详情显示规则（时间/时区/单次），不再显示「已删除」；
-  远端 Markdown 预览实测渲染完整内容
+  远端 Markdown 实测渲染完整内容；远端 1×1 PNG 在预览面板渲染为 blob 图片
 - **调研**：新增 `docs/远端派生面板.md`，记录五个面板的数据来源与剩余工作
   （交付物已可用；计划缺 `session/follow`/`session/page`；子代理依赖本地投影；
   二进制预览缺 multipart 通道）

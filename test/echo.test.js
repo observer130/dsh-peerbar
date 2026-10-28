@@ -208,6 +208,8 @@ test('白名单里的每个端点都要有明确归属（回写 or 已知无需�
     // T17 远端文件面板：只读
     'workspaceFiles/list',
     'workspaceFiles/read',
+    // 文档预览的二进制字节：只读，结果进右侧栏 tab
+    'workspaceFiles/readBytes',
     'workspaceFiles/stat',
     // 「@」/skill 候选源：只读
     'fileReferences/list',
