@@ -296,6 +296,47 @@ try {
     problems.push('头部没有视图选项按钮')
   }
 
+  // 单列表回归：本机会话平铺后，远端组仍必须在同一棵树里；再切回按工作区。
+  const viewButtonSelector = '.dshp-headerActions button:last-child'
+  if (await page.$(viewButtonSelector)) {
+    const countsOf = () =>
+      page.evaluate(() => ({
+        projectRows: document.querySelectorAll('.dshp-projectRow').length,
+        sessionRows: document.querySelectorAll('.dshp-sessionRow').length,
+      }))
+    const beforeView = await countsOf()
+    await page.click(viewButtonSelector)
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    const switched = await page.evaluate(() => {
+      const item = [...document.querySelectorAll('[role="menuitem"]')].find((node) => node.textContent.trim() === '单列表')
+      if (!item) return false
+      item.click()
+      return true
+    })
+    if (!switched) {
+      problems.push('视图选项里点不到「单列表」')
+    } else {
+      await new Promise((resolve) => setTimeout(resolve, 600))
+      const flatView = await countsOf()
+      first.flatView = { before: beforeView, flat: flatView }
+      if (flatView.sessionRows === 0) problems.push('单列表视图没有任何会话行')
+      if (flatView.projectRows === 0) problems.push('单列表视图下远端工作区组消失了')
+      // 切回按工作区，避免影响后续远端组用例
+      await page.click(viewButtonSelector)
+      await new Promise((resolve) => setTimeout(resolve, 400))
+      await page.evaluate(() => {
+        const item = [...document.querySelectorAll('[role="menuitem"]')].find((node) => node.textContent.trim() === '按工作区')
+        item?.click()
+      })
+      await new Promise((resolve) => setTimeout(resolve, 600))
+      const restoredView = await countsOf()
+      first.flatView.restored = restoredView
+      if (restoredView.projectRows === 0 || restoredView.sessionRows === 0) {
+        problems.push('单列表切回按工作区后侧栏没有恢复')
+      }
+    }
+  }
+
   if (await page.$('.dshp-projectRow')) {
     await page.hover('.dshp-projectRow')
     await page.click('.dshp-projectRow .dshp-rowActions button:last-child')
