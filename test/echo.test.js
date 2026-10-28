@@ -213,6 +213,14 @@ test('白名单里的每个端点都要有明确归属（回写 or 已知无需�
     'fileReferences/list',
     'sessionReferenceResolver/candidates',
     'skills/list',
+    // 远端终端：状态只活在右侧栏终端面板里，不进侧栏工作区快照；
+    // attach/retain 是双工流，根本不在白名单里（走 lib/terminal.js 的 WS 代理）
+    'terminal/environment',
+    'terminal/shells',
+    'terminal/list',
+    'terminal/create',
+    'terminal/rename',
+    'terminal/close',
   ])
   const unaccounted = [...RPC_ALLOWLIST].filter((endpoint) => !handled.has(endpoint) && !byDesign.has(endpoint))
   assert.deepEqual(unaccounted, [], `这些端点在 applyEchoToWorkspaces 里没有归属：${unaccounted.join(', ')}`)
