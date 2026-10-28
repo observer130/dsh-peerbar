@@ -7,7 +7,7 @@
 - **是什么**：一个 DeepSeek Harness（dsh）插件。**在原生侧栏那一列里**把本机工作区/会话与多台远端（nv50 / m50）混排成一棵树；点远端会话在原生中栏续聊。形态见 `docs/实现方案-A.md`（ADR-001），需求以 `docs/功能复述.md` 为准。
 - **技术栈**：纯 JavaScript ESM，**无构建步骤**，目标零第三方依赖。宿主半跑在 Node，客户端半是浏览器 `__ModuleLoader__` bundle。
 - **目标宿主**：dsh `0.2.1-rc.2` / `rc.3`（两者都实测通过），profile `~/.dsh/profiles/desktop`。
-- **当前阶段**：v5（分页/标题同步/401 自愈/图片附件/命令/文件面板/模型切换）、v6（测试分层、视图偏好、拖拽排序、打包、未读、文件面板 SSE）已合入 `master`。v7 收尾随 0.7.0 合入：远端改名后主视图面包屑同步（binding 冻结 + 快照缓存的根因修复）、远端浏览器面板整体降级、文案统一；`ui-check` 增加面包屑断言。**远端终端评估结论：不做**（`terminal/attach` 是双向 PTY 流，见 `docs/spike-S4.md`）；v7 计划见 `docs/一期计划-v7.md`。
+- **当前阶段**：v5（分页/标题同步/401 自愈/图片附件/命令/文件面板/模型切换）、v6（测试分层、视图偏好、拖拽排序、打包、未读、文件面板 SSE）已合入 `master`。v7 收尾随 0.7.0 合入：远端改名后主视图面包屑同步（binding 冻结 + 快照缓存的根因修复）、远端浏览器面板整体降级、文案统一；`ui-check` 增加面包屑断言。v8 起**远端终端已可用**（0.8.0）：官方右侧栏终端 + 本机插件双工 WS 代理，见 `docs/远端终端.md` 与 `scripts/ui-check.mjs` 的 `terminalPanel` 断言；早先「不做」的评估结论已被取代（`docs/spike-S4.md`）。v7 计划见 `docs/一期计划-v7.md`。
 - **两半结构**：`lib/index.js` 宿主半（注册路由、探活、拉取远端快照、缓存）；`lib/client.js` 客户端半（影子注册 `sidebar.workspaces`、`settings.section`；远端会话合成 SessionBinding 后交原生 `openSession`）。两半之间只通过同源 HTTP 通信。
 
 ## 架构不变量
@@ -73,7 +73,9 @@ lib/guard.js     回环 + 同源栅栏（P0-5 的地基）
 lib/identity.js  origin 归一化、hostId、虚拟 ID、cwd → 工作区
 lib/remote.js    令牌换 cookie、RPC 信封、session/list、分页、错误分类
 lib/rpc.js       远端 RPC 白名单（/hosts/<id>/rpc 只放行这张表）
-lib/stream.js    只读流通道：workspace/follow 归档集 + 常驻 workspaceFiles/changes（SSE 转发用）
+lib/stream.js    Remote 流通道：workspace/follow 归档集、workspaceFiles/changes（SSE）、
+                 双工 terminal/attach（send/close）
+lib/terminal.js  远端终端 WS 代理：浏览器 ↔ 本机 ↔ 远端 mux，端点白名单 + 帧转发
 lib/probe.js     探活状态机与退避
 lib/peers.js     每 Host 的快照编排、调度与缓存
 lib/codes.js     错误码，前后端共用
@@ -92,6 +94,8 @@ docs/            需求、插件开发规范、开发计划、spike 结论
    由此还有一条 rc.3 实测硬限制：影子 entry 没有自己的 `children`，runtime **不会注入** `props.renderSlot`；`ctx.slots.renderSlot` 只允许 root，补声明又撞官方声明。因此 `sidebar.workspaces.session.menu.item` / `session.row.action` 这类官方子座位在影子替换下接不回来，行内 action 只能自绘。要恢复组合必须上游提供 workspace additive slot，见 `docs/upstream-slot-proposal.md`。
 2. 插件自己注册的 `ctx.webServer` 路由**没有任何认证**——dsh 的浏览器 cookie 与 Host/Origin 校验只覆盖 `/api`。同源/回环 guard 必须自己写。
 3. `/api` 不是 REST：`POST /api/<namespace>/<method>` + `{ args }`，流式走 WS `/api/remote.mux`。
+   插件自己的双工通道用 `ctx.webServer.registerUpgrade`（rc.3 已核实，见插件规范 §12）；
+   反向方向本插件是 WS 服务端，服务端帧**不得加掩码**。
 4. 客户端半必须是 `window.__ModuleLoader__.load({ id, factory(require) })`，**不能出现 `import`/`export`**；`react`、`react-dom`、`@deepseek-ai/dsh-client-ui-primitives` 是 baseline external，禁止打包进自己的 bundle。
 5. 宿主半依赖用静态 `export const inject = [...]`，不要手动等 service。
 
@@ -179,4 +183,7 @@ node scripts/ui-check.mjs           # 发布前全量：含远端新建会话 + 
 
 - 提交令牌、cookie、证书私钥（`.gitignore` 已挡住 `dsh-peerbar.json`、`*-cache.json`、`*.pem`、`*.key`，别用 `-f` 绕过）。
 - 把令牌写进日志、错误 message 或任何响应体。
-- 做白名单外的转发、任意 WS 帧转发、任何跨机写操作。
+- 做白名单外的转发、任意 WS 帧转发。
+- 任何跨机写操作——**终端是唯一显式例外**：用户亲手打开右侧栏终端标签时，经
+  `lib/terminal.js` 把 `terminal/attach|retain` 代理到该会话所属远端；没有后台写入、
+  没有自动执行，端点白名单之外一律拒绝。

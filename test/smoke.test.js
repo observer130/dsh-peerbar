@@ -76,6 +76,9 @@ test('session 路由处理器可执行，不抛引用错误', async () => {
         routes.push(route)
         return () => {}
       },
+      registerUpgrade(route) {
+        return () => {}
+      },
     },
     sessionController: { async list() { return { items: [] } } },
   }
@@ -135,6 +138,9 @@ test('rpc 路由处理器可执行，白名单生效', async () => {
     webServer: {
       register(route) {
         routes.push(route)
+        return () => {}
+      },
+      registerUpgrade(route) {
         return () => {}
       },
     },
@@ -209,6 +215,9 @@ test('health 版本与 package.json 一致', async () => {
     webServer: {
       register(route) {
         routes.push(route)
+        return () => {}
+      },
+      registerUpgrade(route) {
         return () => {}
       },
     },

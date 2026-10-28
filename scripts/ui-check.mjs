@@ -678,6 +678,97 @@ try {
   }
   }
 
+  // V8：远端终端。官方右侧栏终端面板必须能穿过本机插件连到远端 PTY。
+  // 只跑 `echo`，不碰模型、不污染会话正文；跑完关掉标签页回收远端进程。
+  if (remoteRowCount > 0) {
+    await page.evaluate(() => {
+      const open = [...document.querySelectorAll('button[aria-label]')]
+        .find((button) => /打开右侧边栏|展开右侧边栏/.test(button.getAttribute('aria-label') || ''))
+      open?.click()
+    })
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+
+    const guide = await page.evaluate(() => {
+      const entry = document.querySelector('[data-sidebar-right-guide-entry="terminal"]')
+      if (!entry) return false
+      entry.click()
+      return true
+    })
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+
+    const hasTerminalTab = await page.evaluate(
+      () => [...document.querySelectorAll('[data-dockkit-tab]')].some((tab) => !/开始|Start/.test(tab.textContent || '')),
+    )
+    if (!hasTerminalTab) {
+      const shellOpened = await page.evaluate(() => {
+        const button = document.querySelector('button[aria-label="选择 Shell"], button[aria-label="Select shell"]')
+        if (!button) return false
+        button.click()
+        return true
+      })
+      if (shellOpened) {
+        await new Promise((resolve) => setTimeout(resolve, 900))
+        await page.evaluate(() => {
+          const item = [...document.querySelectorAll('[role="menuitem"], [role="option"]')]
+            .find((node) => /bash/i.test(node.textContent || ''))
+          item?.click()
+        })
+      }
+    } else {
+      await page.evaluate(() => {
+        const tab = [...document.querySelectorAll('[data-dockkit-tab]')]
+          .find((node) => !/开始|Start/.test(node.textContent || ''))
+        tab?.click()
+      })
+    }
+
+    let terminalReady = false
+    for (let i = 0; i < 20 && !terminalReady; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      terminalReady = await page.evaluate(() => Boolean(document.querySelector('.xterm-screen, .xterm')))
+    }
+    first.terminalPanel = terminalReady
+    if (!terminalReady) {
+      problems.push('远端会话的右侧栏终端没有出现 xterm（V8 terminal/attach）')
+    } else {
+      const center = await page.evaluate(() => {
+        const node = document.querySelector('.xterm-screen, .xterm')
+        const rect = node.getBoundingClientRect()
+        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+      })
+      await page.mouse.click(center.x, center.y)
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      await page.keyboard.type('echo PBCHK-$((6*7))')
+      await page.keyboard.press('Enter')
+      await new Promise((resolve) => setTimeout(resolve, 2500))
+      const screen = await page.evaluate(
+        () => document.querySelector('.xterm-screen, .xterm')?.innerText ?? '',
+      )
+      first.terminalScreen = screen.slice(-160)
+      await page.screenshot({ path: path.join(OUT, 'ui-11-remote-terminal.png') })
+      if (!screen.includes('PBCHK-42')) {
+        problems.push(`远端终端没有回显 PBCHK-42（V8 attach/write）：${screen.slice(-120)}`)
+      }
+      // 清理：关掉标签页，让远端回收进程
+      await page.evaluate(() => {
+        const tab = [...document.querySelectorAll('[data-dockkit-tab]')]
+          .find((node) => !/开始|Start/.test(node.textContent || ''))
+        tab?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+      })
+      await new Promise((resolve) => setTimeout(resolve, 400))
+      const closedTab = await page.evaluate(() => {
+        const tab = [...document.querySelectorAll('[data-dockkit-tab]')]
+          .find((node) => !/开始|Start/.test(node.textContent || ''))
+        const button = tab?.querySelector('button')
+        if (!button) return false
+        button.click()
+        return true
+      })
+      first.terminalClosed = closedTab
+      await new Promise((resolve) => setTimeout(resolve, 800))
+    }
+  }
+
   const knownWarnings = consoleErrors.filter((text) => KNOWN_NOISE.some((pattern) => pattern.test(text)))
   const realErrors = consoleErrors.filter((text) => !knownWarnings.includes(text))
   const result = { base, mode: QUICK ? 'quick' : 'full', ...first, consoleErrors: realErrors, knownWarnings }

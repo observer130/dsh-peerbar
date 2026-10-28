@@ -103,6 +103,16 @@ if "sidebar.workspaces.directoryFlow" not in picker_src:
     problems.append("directory-picker-browse 不再注入 sidebar.workspaces.directoryFlow（注入链路变了）")
 print("  · sidebar.workspaces.directoryFlow：检查完毕")
 
+# ---- 6. 远端终端通道 ----
+webserver_src = read(os.path.join(pkgs, "dsh-host-webserver", "lib", "index.js"))
+if "registerUpgrade(route)" not in webserver_src:
+    problems.append("webServer.registerUpgrade 不存在（远端终端 WS 代理无法挂载）")
+terminal_src = package_host("dsh-api-terminal-controller")
+for endpoint in ("terminal/attach", "terminal/retain"):
+    if f"'{endpoint}':" not in terminal_src:
+        problems.append(f"{endpoint} 不存在（远端终端无法连接/保留）")
+print("  · 远端终端（registerUpgrade + attach/retain）：检查完毕")
+
 # ---- 结论 ----
 print()
 if problems:
