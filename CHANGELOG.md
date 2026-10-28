@@ -2,6 +2,14 @@
 
 本项目在 0.5.0 之前没有正式发布（只能填仓库绝对路径安装），下面是按能力阶段整理的历史。
 
+## 0.6.0 — 未发布（v6 批次 1–2）
+
+- **侧栏拖拽排序**：组内拖动会话、同 Host 内拖动工作区；本机走 `workspaces.insertBefore` /
+  `insertSessionBefore`，远端走 `workspace/insertBefore` / `insertSessionBefore`，刷新后保持
+- **视图偏好持久化**：分组方式、排序方式、归档过滤存 `localStorage`；拖拽开始时自动切「手动排序」
+- **测试分层**：新增假远端契约测试（`test/support/mock-host.js` + 7 条用例），单测 59 → 66、
+  1.3s 跑完；`ui-check` 增加 `--quick`（约 40s，不建会话、不调真模型）
+
 ## 0.5.0 — v5 一期
 
 - **远端历史分页与上翻**：首屏 200 条消息（原被压到 50）；向上滚动按 Turn 对齐加载更早的页，
