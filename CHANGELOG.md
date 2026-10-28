@@ -13,6 +13,10 @@
   `ui-check --quick` 全绿）；README 补 tgz 安装方式
 - **远端 localhost 链接保护**：远端会话里从聊天区打开 loopback 链接时改为复制地址 + 提示，
   不再在本机打开远端端口；右侧「浏览器」面板本身仍是本机组件（已知限制）
+- **远端未读提示**：按官方 `completionUnread` 语义观察 running 的 true→false，
+  后台会话跑完显示完成圆点，打开即清（内存态，与官方一致）
+- **远端文件面板自动刷新**：新增 SSE 路由 `/api/watch`，把浏览器订阅转发到远端
+  `workspaceFiles/changes` 流；面板不再依赖手动刷新
 
 ## 0.5.0 — v5 一期
 
