@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 /**
@@ -189,4 +190,58 @@ test('rpc 路由处理器可执行，白名单生效', async () => {
   // 白名单内但 Host 不存在：404
   const missing = await post('/dsh-peerbar/api/hosts/h_nope/rpc', { endpoint: 'session/prompt', args: {} })
   assert.equal(missing.statusCode, 404)
+})
+
+/**
+ * `/health` 的 version 必须来自 package.json。
+ * 之前这里写死 0.1.0，包已经到 0.5.0 还在报旧版本，排查时极易误判。
+ */
+test('health 版本与 package.json 一致', async () => {
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  const { apply } = await import('../lib/index.js')
+  const routes = []
+  const ctx = {
+    logger: { info() {}, warn() {} },
+    effect(fn) {
+      fn()
+      return () => {}
+    },
+    webServer: {
+      register(route) {
+        routes.push(route)
+        return () => {}
+      },
+    },
+    sessionController: { async list() { return { items: [] } } },
+  }
+  apply(ctx, { probeIntervalMs: 60000 })
+
+  const health = routes.find((r) => r.path === '/dsh-peerbar/api/health')
+  assert.ok(health, '没有注册 /health 路由')
+
+  const res = await new Promise((resolve, reject) => {
+    const req = {
+      method: 'GET',
+      url: '/dsh-peerbar/api/health',
+      headers: { host: '127.0.0.1:0', origin: 'http://127.0.0.1:0' },
+      socket: { remoteAddress: '127.0.0.1' },
+      on() {},
+    }
+    const out = {
+      statusCode: 0,
+      body: '',
+      setHeader() {},
+      writeHead(code) {
+        this.statusCode = code
+      },
+      end(chunk) {
+        this.body = String(chunk ?? '')
+        resolve(this)
+      },
+    }
+    Promise.resolve(health.handler(req, out)).catch(reject)
+  })
+
+  assert.equal(res.statusCode, 200)
+  assert.equal(JSON.parse(res.body).version, pkg.version)
 })
