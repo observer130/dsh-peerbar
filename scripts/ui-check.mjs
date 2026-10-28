@@ -474,6 +474,17 @@ try {
     await page.screenshot({ path: path.join(OUT, 'ui-3-remote-session.png'), fullPage: false })
     first.panel = panel
 
+    // V7-1：主视图面包屑必须跟侧栏选中行同名（远端改名后不同步是 v6 的尾巴）
+    const crumbCheck = await page.evaluate(() => ({
+      crumb: document.querySelector('.if816a_crumbCurrent')?.textContent?.trim() ?? null,
+      row: document.querySelector('.koUx-W_sessionRow.koUx-W_selected .koUx-W_title')?.textContent?.trim() ?? null,
+    }))
+    first.crumb = crumbCheck
+    if (!crumbCheck.crumb) problems.push('主视图没有面包屑标题')
+    else if (crumbCheck.row && crumbCheck.crumb !== crumbCheck.row) {
+      problems.push(`面包屑与侧栏选中行不一致：${crumbCheck.crumb} / ${crumbCheck.row}`)
+    }
+
     if (panel.chatNodes === 0) problems.push('原生会话没有渲染任何聊天节点')
     if (panel.nativeTool === 0) problems.push('原生会话没有工具调用节点')
     if (panel.foldRows === 0) problems.push('原生会话没有折叠行（过程组）')
