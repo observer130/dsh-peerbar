@@ -10,6 +10,7 @@ import assert from 'node:assert/strict'
 
 import { groupSessions } from '../lib/identity.js'
 import { callRemote, probePage, readRawPage } from '../lib/remote.js'
+import { openRemoteStream } from '../lib/stream.js'
 import { probeHost } from '../lib/probe.js'
 import { createMockHost, sessionItem } from './support/mock-host.js'
 
@@ -185,4 +186,35 @@ test('令牌无效：401 落到 auth-required，不误报网络错误', async (t
   assert.equal(result.ok, false)
   assert.equal(result.code, 'auth-required')
   assert.equal(result.status, 'auth-required')
+})
+
+
+test('openRemoteStream：持续转发 ready/change，close 可收尾', async (t) => {
+  const mock = await createMockHost({
+    changes: [
+      { kind: 'change', change: { absolutePath: '/work/a', version: 2 } },
+      { kind: 'change', change: { absolutePath: '/work/a', version: 3 } },
+    ],
+  })
+  t.after(() => mock.close())
+  const host = await onlineHost(mock)
+  const items = []
+  const errors = []
+  const handle = await openRemoteStream(
+    host,
+    'workspaceFiles/changes',
+    { workspaceFileScopeId: 's1', path: '/work/a' },
+    { onItem: (value) => items.push(value), onError: (error) => errors.push(error), timeoutMs: 3000 },
+  )
+  assert.ok(handle && typeof handle.close === 'function')
+  // 等 ready + 两帧 change（mock 每 30ms 一帧）
+  const deadline = Date.now() + 2000
+  while (items.length < 3 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.deepEqual(items[0], { kind: 'ready' })
+  assert.equal(items[1].change.version, 2)
+  assert.equal(items[2].change.version, 3)
+  assert.equal(errors.length, 0)
+  assert.equal(mock.calls.open.endpoint, 'workspaceFiles/changes')
+  assert.deepEqual(mock.calls.open.payload.args, { workspaceFileScopeId: 's1', path: '/work/a' })
+  handle.close()
 })

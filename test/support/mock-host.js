@@ -328,6 +328,22 @@ export async function createMockHost(options = {}) {
         if (message?.type !== 'open' || opened) continue
         opened = true
         calls.open = message
+        if (message.endpoint === 'workspaceFiles/changes') {
+          // 通用流：先 ready，再按 options.changes 逐个发 change 帧，保持连接
+          socket.write(serverFrame(0x1, JSON.stringify({ type: 'item', streamId: message.streamId, value: { kind: 'ready' } })))
+          const changes = Array.isArray(options.changes) ? options.changes : []
+          changes.forEach((value, index) => {
+            setTimeout(() => {
+              if (closed) return
+              try {
+                socket.write(serverFrame(0x1, JSON.stringify({ type: 'item', streamId: message.streamId, value })))
+              } catch {
+                /* 已断开 */
+              }
+            }, 30 * (index + 1))
+          })
+          continue
+        }
         if (options.baselineError) {
           socket.write(
             serverFrame(
