@@ -11,9 +11,30 @@
 - **工作区信息退化可见**：baseline 读取失败时，侧栏在组行给出 ⓘ（含原因），不再「菜单凭空消失」
 - **远端文件引用拦截**：远端会话里点文件只提示「在远端某主机上」，不会在本机打开同名文件
 - 文档与元数据对齐实现：README 去掉「只读」描述，补能力清单与已知限制
-- **兼容 `0.2.1-rc.3`**：升级后复验通过——18 个白名单端点、`session/page` 的
+- **兼容 `0.2.1-rc.3`**：升级后复验通过——18 个白名单端点（当时的全部）、`session/page` 的
   `beforeSeq`/`turnWindow`、`sidebarRight.openResource`、`ctx.remote.session.modelCatalog`、
   `sidebar.workspaces` 的 `directoryFlow` 子座位全部仍在；58 单测 + ui-check 全绿
+
+### v5 二期（同版本内）
+
+- **远端图片渲染**：消息里的图片经 `session/attachment` 取回 base64，转成官方
+  `readAttachment` 契约的 `number[]`，历史图片正常显示
+- **远端发图/附件**：图片仍走官方内联发送；非图片文件接管 `fileUpload.upload`，
+  改投远端 `fileUploads/upload`
+- **运行时兼容告警**：`/state` 增加 `compatError`；深端点探测失败时侧栏显示 ⚠
+- **`dsh web` 形态验证**：侧栏接管 / RPC 代理 / WS baseline / 续聊 e2e 在 web profile 下跑通
+
+### v5 三期（同版本内）
+
+- **远端斜杠命令**：拦截 `RemoteNamespaceService.invokeRemote`，`commands/*`
+  按会话归属转发到远端
+- **远端文件面板（只读）**：同一拦截点代理 `workspaceFiles/list|read|stat`；
+  watch 流先给 readiness，不再卡「正在读取…」
+- **「@」补全**：补上 `fileReferences` / `sessionReferenceResolver` / `skills` 三个 namespace
+- **模型切换 / 压缩**：`session/modelCatalog|selectModel` 按 host 路由；
+  `commands/execute` 超时预算 60 秒
+- **子座位**：影子替换后不再重复声明 `sidebar.workspaces` 的 children
+  （rc.3 会抛 `slot ... is already declared`）
 
 ## 0.4.0 — v4 远端交互（未单独发版）
 
