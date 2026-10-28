@@ -2,6 +2,23 @@
 
 本项目在 0.5.0 之前没有正式发布（只能填仓库绝对路径安装），下面是按能力阶段整理的历史。
 
+## 0.8.0 — 远端终端（2026-10-28）
+
+- **官方右侧栏终端直连远端 PTY**：浏览器 ↔ 本机插件 ↔ 远端 `/api/remote.mux`
+  的双工 WS 代理；xterm、输入窗口、ack、刷新恢复全部复用官方实现，不自绘终端
+- **宿主半**：`ctx.webServer.registerUpgrade` 认领 `/dsh-peerbar/api/terminal`，
+  端点白名单只有 `terminal/attach|retain`；按 `hostId` 路由、裸会话 ID 换远端
+  agentId/sessionId；每条流单独换 cookie
+- **客户端半**：`terminal` namespace 的 unary 改走 `/hosts/<id>/rpc` 白名单
+  （environment/shells/list/create/rename/close），`attach|retain` 换成同形状
+  双工句柄（`send()` + `for await`），官方终端模型无需改动
+- **流层**：`openRemoteStream` 增加 `send()`/`end()`；新增 `encodeServerFrame`
+  （服务端帧不加掩码，否则浏览器断连）
+- **验收**：`ui-check`（含 `--quick`）新增远端终端阶段——打开右侧栏、新建终端、
+  输入 `echo PBCHK-$((6*7))`、断言回显 `PBCHK-42`、关闭标签页回收；另验证刷新后
+  `retain` 恢复提示符
+- 单测新增 `test/terminal.test.js`（白名单、ID 映射、服务端帧、upgrade guard）
+
 ## 0.7.4 — compat 边界与收尾（2026-10-28）
 
 - **私有 patch 集中到 `installClientCompat()`**：文件引用、浏览器面板、附件上传、
