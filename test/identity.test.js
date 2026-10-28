@@ -104,18 +104,22 @@ test('groupSessions 带 registry：注册表驱动分组/改名标题/未分组�
   // 注册工作区全部出组（含 0 会话的空组），组名用 registry title
   const ga = groups.find((g) => g.workspaceId === 'ws-real-1')
   assert.equal(ga.name, '改过名的工作区')
+  // 组顺序：registry 下标；未分组永远最后（客户端「手动排序」按它排组）
+  assert.equal(ga.order, 0)
   assert.deepEqual(ga.sessions.map((s) => s.rawId), ['s2', 's1'])
   assert.equal(ga.sessions[0].pinned, true)
   assert.equal(ga.sessions[1].archived, true)
   const gEmpty = groups.find((g) => g.workspaceId === 'ws-empty')
   assert.ok(gEmpty, '没有会话的注册工作区也要出组')
   assert.equal(gEmpty.sessions.length, 0)
+  assert.equal(gEmpty.order, 1)
 
   // 未归属会话进未分组桶：workspaceId 为 null、ungrouped 标记、不按 cwd 分组
   const bucket = groups.find((g) => g.ungrouped)
   assert.ok(bucket, '未归属会话应进未分组桶')
   assert.equal(bucket.workspaceId, null)
   assert.equal(bucket.name, null)
+  assert.equal(bucket.order, Number.MAX_SAFE_INTEGER)
   assert.deepEqual(bucket.sessions.map((s) => s.rawId), ['s3'])
   assert.equal(groups.filter((g) => g.cwd === '/home/loose').length, 0)
 })
