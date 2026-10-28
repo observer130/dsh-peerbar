@@ -3,7 +3,8 @@
  * UI 自检：起 headless Chrome，登录本地 dsh web 实例，点开远端会话，截图并给出断言。
  *
  * 用法：
- *   node scripts/ui-check.mjs                     # 从 .workbuddy/tmp/pb-web.log 读端口与 token
+ *   node scripts/ui-check.mjs                     # 全量：含远端新建会话 + 真模型回复（≤180s）
+ *   node scripts/ui-check.mjs --quick             # 快速：侧栏/远端行/菜单/正文渲染，不发消息
  *   node scripts/ui-check.mjs --base <url>        # 显式给带 token 的 URL
  *
  * 产物：.workbuddy/tmp/ui-*.png
@@ -42,6 +43,8 @@ const KNOWN_NOISE = [
 const problems = []
 const warnings = []
 const base = readBase()
+// 快速档：只验浏览器侧渲染与交互，不建会话、不发消息、不调真实模型。
+const QUICK = process.argv.includes('--quick')
 // `--cdp http://127.0.0.1:9224` 连一个已在跑的 Chrome：
 // 代理沙箱把 RLIMIT_AS 卡在 4GB，直接 launch 会 core dump；
 // 用 `systemd-run --user ... google-chrome-stable --headless=new
@@ -478,6 +481,13 @@ try {
     if (panel.actionBars === 0) problems.push('原生消息没有动作条')
   }
 
+  if (QUICK) {
+    // 快速档：只验「远端会话能打开 + 原生 composer 在」，不建会话、不发消息。
+    // 下面的全量块会往远端写数据，所以整块跳过（保持缩进不动，减少 diff）。
+    const composer = await page.$('div.B2HNUa_input[role="textbox"]')
+    if (!composer) problems.push('远端会话没有原生 composer（--quick）')
+    first.composerPresent = Boolean(composer)
+  } else {
   // P4/P6 浏览器级：远端新建会话 → composer 发消息 → 远端真跑 → 模型座可切
   // （用「+」新建的测试会话，不污染真实会话；结束后归档清理）
   // 门禁：必须确认 session/create 真的发生了（捕获到返回的 sessionId）才允许打字，
@@ -610,10 +620,11 @@ try {
       first.testSessionCleanup = false
     }
   }
+  }
 
   const knownWarnings = consoleErrors.filter((text) => KNOWN_NOISE.some((pattern) => pattern.test(text)))
   const realErrors = consoleErrors.filter((text) => !knownWarnings.includes(text))
-  const result = { base, ...first, consoleErrors: realErrors, knownWarnings }
+  const result = { base, mode: QUICK ? 'quick' : 'full', ...first, consoleErrors: realErrors, knownWarnings }
   fs.writeFileSync(path.join(OUT, 'ui-check.json'), JSON.stringify(result, null, 2))
   console.log(JSON.stringify(result, null, 2))
   if (realErrors.length) problems.push(`页面报错 ${realErrors.length} 条`)

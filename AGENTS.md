@@ -145,7 +145,8 @@ export function apply(ctx) {
 scripts/dev-server.sh > .workbuddy/tmp/pb-web.log 2>&1 &
 
 # 2) 自动验收：登录 → 截图侧栏 → 展开远端组 → 点开会话 → 再截图 → 断言
-node scripts/ui-check.mjs
+node scripts/ui-check.mjs --quick   # 日常：不建会话、不发消息、不调真模型（约 40s）
+node scripts/ui-check.mjs           # 发布前全量：含远端新建会话 + 真模型回复（≤180s）
 ```
 
 - 产物在 `.workbuddy/tmp/`：`ui-1-sidebar.png`、`ui-2-remote-expanded.png`、
