@@ -2,6 +2,21 @@
 
 本项目在 0.5.0 之前没有正式发布（只能填仓库绝对路径安装），下面是按能力阶段整理的历史。
 
+## 0.7.1 — 客户端生命周期与树模型收敛（2026-10-28）
+
+- **可卸载的补丁**：样式、服务就绪轮询、`sidebarRight.openResource/openTab`、
+  `fileUpload.upload`、namespace `invokeRemote`、`ISessions` 原型与
+  `list.set/getSnapshot` 都保存原方法并登记 disposer；卸载时还原并清掉
+  `__peerbar*` 标记，重载不再留下半残拦截
+- **本机写操作改官方入口**：rename 走 `sessions.using(...).binding.session.rename`，
+  fork 走 `sessions.fork`，去掉 `callOn('sessions','rename')` 这类非公开路径
+- **本地/远端行与菜单收敛**：ProjectRow、Session 菜单、Workspace 菜单各合并为一份；
+  新增 `toTreeSession`，渲染层只消费归一后的字段，不再在 JSX 里散落 `host ? ... : ...`
+- **重命名体验**：对话框聚焦时全选当前名称；会话行补 `aria-selected`
+- **rc.3 子座位结论**：影子替换带 children 的 single slot 后无法接回
+  `props.renderSlot`，补声明会撞 `already declared`；恢复组合需要上游 additive slot
+  （详见 `docs/插件设计优化分析.md` 第 8 节）
+
 ## 0.7.0 — v7 收尾（2026-10-28）
 
 - **主视图面包屑随远端改名同步**：修掉 v6 的 T10 尾巴。根因是远端 binding 被官方
