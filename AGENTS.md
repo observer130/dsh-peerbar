@@ -89,6 +89,7 @@ docs/            需求、插件开发规范、开发计划、spike 结论
 完整清单见 `docs/插件开发规范.md`，这里只放会直接导致返工的部分：
 
 1. `sidebar.workspaces` 是 **single** slot 且被官方独占，**不能往里追加行**；本插件用 `priority: -1` 影子替换它、自己画整棵树。影子替换只替换渲染：官方 entry 的 `children` 声明仍然生效，**不要重复声明子座位**（会抛 `slot ... is already declared`）；rc.2 曾需要声明，升级后先跑 `scripts/compat-check.sh` 确认。
+   由此还有一条 rc.3 实测硬限制：影子 entry 没有自己的 `children`，runtime **不会注入** `props.renderSlot`；`ctx.slots.renderSlot` 只允许 root，补声明又撞官方声明。因此 `sidebar.workspaces.session.menu.item` / `session.row.action` 这类官方子座位在影子替换下接不回来，行内 action 只能自绘。要恢复组合必须上游提供 workspace additive slot，见 `docs/upstream-slot-proposal.md`。
 2. 插件自己注册的 `ctx.webServer` 路由**没有任何认证**——dsh 的浏览器 cookie 与 Host/Origin 校验只覆盖 `/api`。同源/回环 guard 必须自己写。
 3. `/api` 不是 REST：`POST /api/<namespace>/<method>` + `{ args }`，流式走 WS `/api/remote.mux`。
 4. 客户端半必须是 `window.__ModuleLoader__.load({ id, factory(require) })`，**不能出现 `import`/`export`**；`react`、`react-dom`、`@deepseek-ai/dsh-client-ui-primitives` 是 baseline external，禁止打包进自己的 bundle。
@@ -99,6 +100,7 @@ docs/            需求、插件开发规范、开发计划、spike 结论
 ## 代码风格
 
 - ESM，`node:` 前缀导入内置模块；两空格缩进；单引号；保留分号。
+- 侧栏样式只用 `dshp-*` 类名 + `--dsw-*` token；**禁止复制** `koUx-W_*` / `hP3ldq_*` 这类官方构建期哈希类名。`ui-check` 会断言 `.dshp-root` 内没有官方哈希类。
 - 零第三方依赖是目标。要 cookie jar 就写二十行，不拉 `tough-cookie`；新增依赖必须先问。
 - 宿主半日志只用 `ctx.logger`，前缀 `[peerbar]`；客户端半没有 `ctx.logger`，用 `console.info/warn/error`。两半都禁止 `console.log`。
 - 面向用户的文案走 `ctx.locale.register(ns, { zh, en })`，不把中文硬编码进渲染函数。
