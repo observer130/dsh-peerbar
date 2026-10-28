@@ -1,6 +1,6 @@
 {
   "name": "dsh-peerbar",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "把多台 dsh 的工作区与会话混排进原生侧栏，用 Host 标签区分来源；可直接续聊、切换模型、管理会话与工作区",
   "type": "module",
   "main": "lib/index.js",
