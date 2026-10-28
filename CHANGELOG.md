@@ -2,6 +2,22 @@
 
 本项目在 0.5.0 之前没有正式发布（只能填仓库绝对路径安装），下面是按能力阶段整理的历史。
 
+## 0.6.0 — v6 批次 1–2（2026-10-28）
+
+- **侧栏拖拽排序**：组内拖动会话、同 Host 内拖动工作区；本机走 `workspaces.insertBefore` /
+  `insertSessionBefore`，远端走 `workspace/insertBefore` / `insertSessionBefore`，刷新后保持
+- **视图偏好持久化**：分组方式、排序方式、归档过滤存 `localStorage`；拖拽开始时自动切「手动排序」
+- **测试分层**：新增假远端契约测试（`test/support/mock-host.js` + 8 条用例），单测 59 → 67、
+  1.3s 跑完；`ui-check` 增加 `--quick`（约 40s，不建会话、不调真模型）
+- **打包验收**：`npm pack` 产物在隔离 profile 安装通过（`/health` 200、security 10/10、
+  `ui-check --quick` 全绿）；README 补 tgz 安装方式
+- **远端 localhost 链接保护**：远端会话里从聊天区打开 loopback 链接时改为复制地址 + 提示，
+  不再在本机打开远端端口；右侧「浏览器」面板本身仍是本机组件（已知限制）
+- **远端未读提示**：按官方 `completionUnread` 语义观察 running 的 true→false，
+  后台会话跑完显示完成圆点，打开即清（内存态，与官方一致）
+- **远端文件面板自动刷新**：新增 SSE 路由 `/api/watch`，把浏览器订阅转发到远端
+  `workspaceFiles/changes` 流；面板不再依赖手动刷新
+
 ## 0.5.0 — v5 一期
 
 - **远端历史分页与上翻**：首屏 200 条消息（原被压到 50）；向上滚动按 Turn 对齐加载更早的页，

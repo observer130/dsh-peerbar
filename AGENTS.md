@@ -7,7 +7,7 @@
 - **是什么**：一个 DeepSeek Harness（dsh）插件。**在原生侧栏那一列里**把本机工作区/会话与多台远端（nv50 / m50）混排成一棵树；点远端会话在原生中栏续聊。形态见 `docs/实现方案-A.md`（ADR-001），需求以 `docs/功能复述.md` 为准。
 - **技术栈**：纯 JavaScript ESM，**无构建步骤**，目标零第三方依赖。宿主半跑在 Node，客户端半是浏览器 `__ModuleLoader__` bundle。
 - **目标宿主**：dsh `0.2.1-rc.2` / `rc.3`（两者都实测通过），profile `~/.dsh/profiles/desktop`。
-- **当前阶段**：v5 一期（分页/标题同步/401 自愈/退化提示/文件引用拦截）、二期（远端图片/附件/兼容告警/web 形态）、三期（斜杠命令/远端文件面板/`@` 候选/模型切换）已全部合入 `master`；单测、security-check、ui-check 均通过。剩余待办见 `docs/待办-v5.md`（拖拽排序、未读、测试分层、打包、远端终端/浏览器）。
+- **当前阶段**：v5 一期（分页/标题同步/401 自愈/退化提示/文件引用拦截）、二期（远端图片/附件/兼容告警/web 形态）、三期（斜杠命令/远端文件面板/`@` 候选/模型切换）已全部合入 `master`；单测、security-check、ui-check 均通过。v6 批次 1–2 已完成并随 0.6.0 合入 `master`（`feat/v6-drag`）：测试分层（67 单测 + `ui-check --quick`）、视图偏好、拖拽排序、打包/tgz 安装验收、远端 localhost 链接拦截。未读提示、远端文件面板实时刷新（SSE → 远端 mux）已完成。**已知未解决**：主视图面包屑不随远端改名（T10 残留，官方 store 不接受合成行，转 v7）；远端终端仍待评估，见 `docs/一期计划-v6.md`。
 - **两半结构**：`lib/index.js` 宿主半（注册路由、探活、拉取远端快照、缓存）；`lib/client.js` 客户端半（影子注册 `sidebar.workspaces`、`settings.section`；远端会话合成 SessionBinding 后交原生 `openSession`）。两半之间只通过同源 HTTP 通信。
 
 ## 架构不变量
@@ -73,7 +73,7 @@ lib/guard.js     回环 + 同源栅栏（P0-5 的地基）
 lib/identity.js  origin 归一化、hostId、虚拟 ID、cwd → 工作区
 lib/remote.js    令牌换 cookie、RPC 信封、session/list、分页、错误分类
 lib/rpc.js       远端 RPC 白名单（/hosts/<id>/rpc 只放行这张表）
-lib/stream.js    只读流通道：WS /api/remote.mux 取 workspace/follow 的归档集
+lib/stream.js    只读流通道：workspace/follow 归档集 + 常驻 workspaceFiles/changes（SSE 转发用）
 lib/probe.js     探活状态机与退避
 lib/peers.js     每 Host 的快照编排、调度与缓存
 lib/codes.js     错误码，前后端共用
@@ -145,7 +145,8 @@ export function apply(ctx) {
 scripts/dev-server.sh > .workbuddy/tmp/pb-web.log 2>&1 &
 
 # 2) 自动验收：登录 → 截图侧栏 → 展开远端组 → 点开会话 → 再截图 → 断言
-node scripts/ui-check.mjs
+node scripts/ui-check.mjs --quick   # 日常：不建会话、不发消息、不调真模型（约 40s）
+node scripts/ui-check.mjs           # 发布前全量：含远端新建会话 + 真模型回复（≤180s）
 ```
 
 - 产物在 `.workbuddy/tmp/`：`ui-1-sidebar.png`、`ui-2-remote-expanded.png`、
