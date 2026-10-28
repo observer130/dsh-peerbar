@@ -2,6 +2,15 @@
 
 本项目在 0.5.0 之前没有正式发布（只能填仓库绝对路径安装），下面是按能力阶段整理的历史。
 
+## 0.7.3 — 工作区组模型收敛（2026-10-28）
+
+- **TreeGroup**：本机工作区、未分组桶、远端工作区归一成同一套组字段
+  （key/source/host/workspace/rows/label/defaultOpen/manageable/containsCurrent）
+- **单一组渲染器**：删除 `renderLocalGroup` / `renderRemoteGroup`，合并为
+  `renderTreeGroup`；本机/远端差异只剩「新建会话入口、Host 标签、离线状态」
+- 远端新建会话抽成 `createRemoteSession`，不再在渲染期创建闭包
+- 单列表视图语义不变：本机会话平铺，远端组仍按组显示
+
 ## 0.7.2 — 侧栏样式去哈希（2026-10-28）
 
 - **侧栏样式不再依赖官方构建期类名**：`koUx-W_*` / `hP3ldq_*` 全部换成
