@@ -7,7 +7,7 @@
 - **是什么**：一个 DeepSeek Harness（dsh）插件。**在原生侧栏那一列里**把本机工作区/会话与多台远端（nv50 / m50）混排成一棵树；点远端会话在原生中栏续聊。形态见 `docs/实现方案-A.md`（ADR-001），需求以 `docs/功能复述.md` 为准。
 - **技术栈**：纯 JavaScript ESM，**无构建步骤**，目标零第三方依赖。宿主半跑在 Node，客户端半是浏览器 `__ModuleLoader__` bundle。
 - **目标宿主**：dsh `0.2.1-rc.2` / `rc.3`（两者都实测通过），profile `~/.dsh/profiles/desktop`。
-- **当前阶段**：v5 一期（分页/标题同步/401 自愈/退化提示/文件引用拦截）、二期（远端图片/附件/兼容告警/web 形态）、三期（斜杠命令/远端文件面板/`@` 候选/模型切换）已全部合入 `master`；单测、security-check、ui-check 均通过。剩余待办见 `docs/待办-v5.md`（拖拽排序、未读、测试分层、打包、远端终端/浏览器）。
+- **当前阶段**：v5 一期（分页/标题同步/401 自愈/退化提示/文件引用拦截）、二期（远端图片/附件/兼容告警/web 形态）、三期（斜杠命令/远端文件面板/`@` 候选/模型切换）已全部合入 `master`；单测、security-check、ui-check 均通过。剩余待办见 `docs/一期计划-v6.md`（拖拽排序、视图持久化、测试分层、打包、未读、远端终端/浏览器）。
 - **两半结构**：`lib/index.js` 宿主半（注册路由、探活、拉取远端快照、缓存）；`lib/client.js` 客户端半（影子注册 `sidebar.workspaces`、`settings.section`；远端会话合成 SessionBinding 后交原生 `openSession`）。两半之间只通过同源 HTTP 通信。
 
 ## 架构不变量
