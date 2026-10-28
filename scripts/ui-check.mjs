@@ -74,77 +74,81 @@ try {
   await page.waitForSelector('.dshp-root', { timeout: 20000 })
   // 会话行异步进树（本机会话列表加载 + 远端探活），等行出现再取快照，最多 5s
   for (let i = 0; i < 10; i += 1) {
-    const rows = await page.evaluate(() => document.querySelectorAll('.koUx-W_sessionRow').length)
+    const rows = await page.evaluate(() => document.querySelectorAll('.dshp-sessionRow').length)
     if (rows > 0) break
     await new Promise((resolve) => setTimeout(resolve, 500))
   }
   await new Promise((resolve) => setTimeout(resolve, 300))
 
   const first = await page.evaluate(() => {
-    const rows = [...document.querySelectorAll('.koUx-W_projectRow')]
-    const session = document.querySelector('.koUx-W_sessionRow')
+    const rows = [...document.querySelectorAll('.dshp-projectRow')]
+    const session = document.querySelector('.dshp-sessionRow')
     const tree = document.querySelector('.dshp-root')
     return {
       projectRows: rows.length,
-      sessionRows: document.querySelectorAll('.koUx-W_sessionRow').length,
+      sessionRows: document.querySelectorAll('.dshp-sessionRow').length,
       remoteTags: [...document.querySelectorAll('.dshp-tag')].map((node) => node.textContent),
       firstGroups: rows.slice(0, 5).map((node) => node.innerText.replace(/\s+/g, ' ').trim()),
       // 原生：blank 行标题是「新会话」，未命名回退是「未命名」
-      blankRows: [...document.querySelectorAll('.koUx-W_sessionRow .koUx-W_title')].filter(
+      blankRows: [...document.querySelectorAll('.dshp-sessionRow .dshp-title')].filter(
         (node) => node.textContent.trim() === '新会话',
       ).length,
-      untitledRows: [...document.querySelectorAll('.koUx-W_sessionRow .koUx-W_title')].filter(
+      untitledRows: [...document.querySelectorAll('.dshp-sessionRow .dshp-title')].filter(
         (node) => node.textContent.trim() === '未命名',
       ).length,
-      menuButtons: document.querySelectorAll('.koUx-W_rowActions button').length,
+      menuButtons: document.querySelectorAll('.dshp-rowActions button').length,
       // 原生行内 ⋯ 只给 aria，不给 title tooltip
-      sessionMenuAria: document.querySelector('.koUx-W_sessionRow .koUx-W_rowActions button')?.getAttribute('aria-label') ?? null,
-      projectMenuAria: document.querySelector('.koUx-W_projectRow .koUx-W_rowActions button')?.getAttribute('aria-label') ?? null,
-      sessionMenuTitle: document.querySelector('.koUx-W_sessionRow .koUx-W_rowActions button')?.getAttribute('title') ?? null,
+      sessionMenuAria: document.querySelector('.dshp-sessionRow .dshp-rowActions button')?.getAttribute('aria-label') ?? null,
+      projectMenuAria: document.querySelector('.dshp-projectRow .dshp-rowActions button')?.getAttribute('aria-label') ?? null,
+      sessionMenuTitle: document.querySelector('.dshp-sessionRow .dshp-rowActions button')?.getAttribute('title') ?? null,
       // 原生分组标题栏：36px 高、标题 14px、搜索按钮 28×28
       headerHeight: (() => {
-        const el = document.querySelector('.hP3ldq_sectionHeader')
+        const el = document.querySelector('.dshp-sectionHeader')
         return el ? Math.round(el.getBoundingClientRect().height) : null
       })(),
       sectionLabelSize: (() => {
-        const el = document.querySelector('.hP3ldq_sectionLabel')
+        const el = document.querySelector('.dshp-sectionLabel')
         return el ? getComputedStyle(el).fontSize : null
       })(),
       searchButton: (() => {
-        const el = document.querySelector('.hP3ldq_searchButton')
+        const el = document.querySelector('.dshp-searchButton')
         if (!el) return null
         const r = el.getBoundingClientRect()
         return `${Math.round(r.width)}x${Math.round(r.height)}`
       })(),
-      folderActive: document.querySelectorAll('.koUx-W_projectRow .koUx-W_folderActive').length,
+      folderActive: document.querySelectorAll('.dshp-projectRow .dshp-folderActive').length,
       selectedRowActiveFolder: (() => {
-        const selected = document.querySelector('.koUx-W_sessionRow.koUx-W_selected')
+        const selected = document.querySelector('.dshp-sessionRow.dshp-selected')
         if (!selected) return null
         const group = selected.parentElement?.parentElement
-        return Boolean(group?.querySelector('.koUx-W_projectRow .koUx-W_folderActive'))
+        return Boolean(group?.querySelector('.dshp-projectRow .dshp-folderActive'))
       })(),
-      overflowLabel: document.querySelector('.hP3ldq_sessionOverflowButton')?.textContent?.trim() ?? null,
+      overflowLabel: document.querySelector('.dshp-sessionOverflowButton')?.textContent?.trim() ?? null,
       // 原生 idle 行走 sidebar.session.row.leading 空槽，不画状态点
-      idleDots: document.querySelectorAll('.koUx-W_sessionRow .koUx-W_slot [data-state="idle"]').length,
+      idleDots: document.querySelectorAll('.dshp-sessionRow .dshp-slot [data-state="idle"]').length,
       idleSlotWidth: (() => {
-        const slot = document.querySelector('.koUx-W_sessionRow .koUx-W_slot')
+        const slot = document.querySelector('.dshp-sessionRow .dshp-slot')
         return slot ? Math.round(slot.getBoundingClientRect().width) : null
       })(),
       // 原生行几何：padding-left 8px（顶层工作区 depth=0），标题距行左 8+16+4=28
       sessionTitleOffset: (() => {
         if (!session) return null
-        const title = session.querySelector('.koUx-W_title')
+        const title = session.querySelector('.dshp-title')
         return title ? Math.round(title.getBoundingClientRect().left - session.getBoundingClientRect().left) : null
       })(),
       sessionPaddingLeft: session ? getComputedStyle(session).paddingLeft : null,
       treeHeight: tree ? tree.getBoundingClientRect().height : 0,
+      // 侧栏根内不应再出现官方构建期哈希类名（回归：新代码又复制了官方 class）
+      foreignClasses:
+        document.querySelector('.dshp-root')?.querySelectorAll('[class*="koUx-W_"], [class*="hP3ldq_"]').length ?? 0,
     }
   })
 
   await page.screenshot({ path: path.join(OUT, 'ui-1-sidebar.png') })
 
-  if (first.projectRows === 0) problems.push('侧栏没有任何工作区行（.koUx-W_projectRow 为 0）')
-  if (first.sessionRows === 0) problems.push('侧栏没有任何会话行（.koUx-W_sessionRow 为 0）')
+  if (first.projectRows === 0) problems.push('侧栏没有任何工作区行（.dshp-projectRow 为 0）')
+  if (first.sessionRows === 0) problems.push('侧栏没有任何会话行（.dshp-sessionRow 为 0）')
+  if (first.foreignClasses > 0) problems.push(`侧栏仍引用官方哈希类名 ${first.foreignClasses} 处`)
   if (first.remoteTags.length === 0) problems.push('侧栏没有远端 Host 标签（.dshp-tag）')
   // 原生 `--dsh-workspace-indent` 是 depth*12，顶层工作区下的会话是 0 → padding-left 8px，
   // 标题距行左 8 + slot 16 + margin 4 = 28。
@@ -154,7 +158,7 @@ try {
   if (first.sessionTitleOffset !== null && first.sessionTitleOffset !== 28) {
     problems.push(`会话标题距行左应为 28px（原生 8+16+4），实际 ${first.sessionTitleOffset}px`)
   }
-  if (first.menuButtons === 0) problems.push('行内没有任何菜单按钮（.koUx-W_rowActions button 为 0）')
+  if (first.menuButtons === 0) problems.push('行内没有任何菜单按钮（.dshp-rowActions button 为 0）')
   // 原生 blank 行只显示“当前选中”的那一条
   if (first.blankRows > 1) problems.push(`blank 行最多 1 条（原生只显示当前选中的），实际 ${first.blankRows}`)
   // aria 文案与原生一致：会话“名”的操作 / 工作区“名”的操作；且不挂 title
@@ -168,7 +172,7 @@ try {
   // 同一时刻只应有一个“当前工作区”，且它必须包含选中的会话
   if (first.folderActive > 1) problems.push(`当前工作区高亮最多 1 个，实际 ${first.folderActive}`)
   if (first.selectedRowActiveFolder === false) {
-    problems.push('选中的会话所在工作区的文件夹没有高亮（koUx-W_folderActive）')
+    problems.push('选中的会话所在工作区的文件夹没有高亮（dshp-folderActive）')
   }
   // 标题栏几何对齐原生（36px / 14px / 28×28）
   if (first.headerHeight !== null && first.headerHeight !== 36) {
@@ -195,10 +199,10 @@ try {
       return candidates.map((node) => node.textContent.trim()).filter(Boolean)
     })
   }
-  if (await page.$('.koUx-W_sessionRow')) {
-    await page.hover('.koUx-W_sessionRow')
+  if (await page.$('.dshp-sessionRow')) {
+    await page.hover('.dshp-sessionRow')
     const hoverButtons = await page.evaluate(
-      () => document.querySelectorAll('.koUx-W_sessionRow .koUx-W_rowActions button').length,
+      () => document.querySelectorAll('.dshp-sessionRow .dshp-rowActions button').length,
     )
     first.hoverButtons = hoverButtons
     if (hoverButtons < 3) problems.push(`会话行 hover 按钮不足 3 个（实际 ${hoverButtons}）`)
@@ -206,8 +210,8 @@ try {
     // （ui-workspace `ArchiveSessionRowButton` / `PinSessionRowButton` 与 Rows.module.css）。
     // 归档图标的 artwork 默认 size=20，不显式传 14 会被 16px 按钮压成 16×20、纵向拉长。
     const iconMetrics = await page.evaluate(() => {
-      const row = document.querySelector('.koUx-W_sessionRow')
-      const actions = row?.querySelector('.koUx-W_rowActions')
+      const row = document.querySelector('.dshp-sessionRow')
+      const actions = row?.querySelector('.dshp-rowActions')
       if (!actions) return null
       return {
         gap: getComputedStyle(actions).gap,
@@ -224,7 +228,7 @@ try {
     })
     first.iconMetrics = iconMetrics
     if (!iconMetrics) {
-      problems.push('会话行没有行操作区（.koUx-W_rowActions）')
+      problems.push('会话行没有行操作区（.dshp-rowActions）')
     } else {
       if (iconMetrics.gap !== '15px') problems.push(`行操作区间距应为 15px（实际 ${iconMetrics.gap}）`)
       for (const item of iconMetrics.items) {
@@ -243,7 +247,7 @@ try {
         }
       }
     }
-    await page.click('.koUx-W_sessionRow .koUx-W_rowActions button:last-child')
+    await page.click('.dshp-sessionRow .dshp-rowActions button:last-child')
     await new Promise((resolve) => setTimeout(resolve, 500))
     const menuItems = await menuItemsOf()
     await page.screenshot({ path: path.join(OUT, 'ui-4-session-menu.png') })
@@ -266,7 +270,7 @@ try {
   }
   // 视图选项菜单（S5）
   const hasViewButton = await page.evaluate(() => {
-    const buttons = [...document.querySelectorAll('.hP3ldq_iconButton')]
+    const buttons = [...document.querySelectorAll('.dshp-headerButton')]
     const button = buttons.find((node) => (node.title || '').includes('视图'))
     if (!button) return false
     button.click()
@@ -292,9 +296,9 @@ try {
     problems.push('头部没有视图选项按钮')
   }
 
-  if (await page.$('.koUx-W_projectRow')) {
-    await page.hover('.koUx-W_projectRow')
-    await page.click('.koUx-W_projectRow .koUx-W_rowActions button:last-child')
+  if (await page.$('.dshp-projectRow')) {
+    await page.hover('.dshp-projectRow')
+    await page.click('.dshp-projectRow .dshp-rowActions button:last-child')
     await new Promise((resolve) => setTimeout(resolve, 500))
     const items = await menuItemsOf()
     await page.screenshot({ path: path.join(OUT, 'ui-5-workspace-menu.png') })
@@ -332,9 +336,9 @@ try {
   first.targetWorkspace = targetWs?.name ?? null
   await page.evaluate((name) => {
     if (!name) return
-    for (const row of document.querySelectorAll('.koUx-W_projectRow')) {
+    for (const row of document.querySelectorAll('.dshp-projectRow')) {
       const tag = row.querySelector('.dshp-tag')
-      const title = row.querySelector('.koUx-W_title')
+      const title = row.querySelector('.dshp-title')
       if (tag && title && title.textContent.trim() === name) {
         row.setAttribute('data-pb-target', '1')
         return
@@ -343,25 +347,25 @@ try {
   }, targetWs?.name)
   await page.evaluate(() => {
     for (const tag of document.querySelectorAll('.dshp-tag')) {
-      const row = tag.closest('.koUx-W_projectRow')
+      const row = tag.closest('.dshp-projectRow')
       if (row && row.getAttribute('aria-expanded') !== 'true') row.click()
     }
   })
   await new Promise((resolve) => setTimeout(resolve, 800))
   const remoteMenu = await page.evaluate(() => {
     const groups = [...document.querySelectorAll('.dshp-tag')]
-      .map((tag) => tag.closest('.koUx-W_projectRow')?.parentElement)
+      .map((tag) => tag.closest('.dshp-projectRow')?.parentElement)
       .filter(Boolean)
     const group = document.querySelector('[data-pb-target="1"]')?.parentElement
-      ?? groups.find((node) => node.querySelector('.koUx-W_sessionRow'))
-    const row = group?.querySelector('.koUx-W_sessionRow')
-    const projectRow = group?.querySelector('.koUx-W_projectRow')
+      ?? groups.find((node) => node.querySelector('.dshp-sessionRow'))
+    const row = group?.querySelector('.dshp-sessionRow')
+    const projectRow = group?.querySelector('.dshp-projectRow')
     return {
       remoteGroups: groups.length,
       hasRemoteRow: Boolean(row),
       hasRemoteProject: Boolean(projectRow),
-      remoteRowButtons: row ? row.querySelectorAll('.koUx-W_rowActions button').length : 0,
-      remoteProjectButtons: projectRow ? projectRow.querySelectorAll('.koUx-W_rowActions button').length : 0,
+      remoteRowButtons: row ? row.querySelectorAll('.dshp-rowActions button').length : 0,
+      remoteProjectButtons: projectRow ? projectRow.querySelectorAll('.dshp-rowActions button').length : 0,
     }
   })
   first.remoteGroups = remoteMenu.remoteGroups
@@ -375,11 +379,11 @@ try {
     // 打开远端会话行菜单
     await page.evaluate(() => {
       const groups = [...document.querySelectorAll('.dshp-tag')]
-        .map((tag) => tag.closest('.koUx-W_projectRow')?.parentElement)
+        .map((tag) => tag.closest('.dshp-projectRow')?.parentElement)
         .filter(Boolean)
       const group = document.querySelector('[data-pb-target="1"]')?.parentElement
-        ?? groups.find((node) => node.querySelector('.koUx-W_sessionRow'))
-      group?.querySelector('.koUx-W_sessionRow .koUx-W_rowActions button:last-child')?.click()
+        ?? groups.find((node) => node.querySelector('.dshp-sessionRow'))
+      group?.querySelector('.dshp-sessionRow .dshp-rowActions button:last-child')?.click()
     })
     await new Promise((resolve) => setTimeout(resolve, 500))
     const remoteItems = await menuItemsOf()
@@ -400,11 +404,11 @@ try {
   if (remoteMenu.hasRemoteProject) {
     await page.evaluate(() => {
       const groups = [...document.querySelectorAll('.dshp-tag')]
-        .map((tag) => tag.closest('.koUx-W_projectRow')?.parentElement)
+        .map((tag) => tag.closest('.dshp-projectRow')?.parentElement)
         .filter(Boolean)
       const group = document.querySelector('[data-pb-target="1"]')?.parentElement
-        ?? groups.find((node) => node.querySelector('.koUx-W_sessionRow'))
-      group?.querySelector('.koUx-W_projectRow .koUx-W_rowActions button:first-child')?.click()
+        ?? groups.find((node) => node.querySelector('.dshp-sessionRow'))
+      group?.querySelector('.dshp-projectRow .dshp-rowActions button:first-child')?.click()
     })
     await new Promise((resolve) => setTimeout(resolve, 500))
     const remoteWsItems = await menuItemsOf()
@@ -423,11 +427,11 @@ try {
   // 取"有真人发言/富文本"的那条截图
   const remoteRowCount = await page.evaluate(() => {
     const groups = [...document.querySelectorAll('.dshp-tag')]
-      .map((tag) => tag.closest('.koUx-W_projectRow')?.parentElement)
+      .map((tag) => tag.closest('.dshp-projectRow')?.parentElement)
       .filter(Boolean)
-    const group = groups.find((node) => node.querySelector('.koUx-W_sessionRow'))
+    const group = groups.find((node) => node.querySelector('.dshp-sessionRow'))
     group?.scrollIntoView({ block: 'center' })
-    return groups.reduce((sum, node) => sum + node.querySelectorAll('.koUx-W_sessionRow').length, 0)
+    return groups.reduce((sum, node) => sum + node.querySelectorAll('.dshp-sessionRow').length, 0)
   })
   if (remoteRowCount === 0) problems.push('远端组展开后没有会话行可点')
   await page.screenshot({ path: path.join(OUT, 'ui-2-remote-expanded.png') })
@@ -439,21 +443,21 @@ try {
     for (let group = 0; group < Math.min(groupCount, 3) && !foundBubble; group += 1) {
       await page.evaluate((index) => {
         const tags = document.querySelectorAll('.dshp-tag')
-        const row = tags[index]?.closest('.koUx-W_projectRow')
+        const row = tags[index]?.closest('.dshp-projectRow')
         if (row && row.getAttribute('aria-expanded') !== 'true') row.click()
       }, group)
       await new Promise((resolve) => setTimeout(resolve, 400))
       const rows = await page.evaluate((index) => {
         const tags = document.querySelectorAll('.dshp-tag')
-        const holder = tags[index]?.closest('.koUx-W_projectRow')?.parentElement
-        return holder ? holder.querySelectorAll('.koUx-W_sessionRow').length : 0
+        const holder = tags[index]?.closest('.dshp-projectRow')?.parentElement
+        return holder ? holder.querySelectorAll('.dshp-sessionRow').length : 0
       }, group)
       for (let index = 0; index < Math.min(rows, 3); index += 1) {
         await page.evaluate(
           ([groupIndex, rowIndex]) => {
             const tags = document.querySelectorAll('.dshp-tag')
-            const holder = tags[groupIndex]?.closest('.koUx-W_projectRow')?.parentElement
-            holder?.querySelectorAll('.koUx-W_sessionRow')[rowIndex]?.click()
+            const holder = tags[groupIndex]?.closest('.dshp-projectRow')?.parentElement
+            holder?.querySelectorAll('.dshp-sessionRow')[rowIndex]?.click()
           },
           [group, index],
         )
@@ -477,7 +481,7 @@ try {
     // V7-1：主视图面包屑必须跟侧栏选中行同名（远端改名后不同步是 v6 的尾巴）
     const crumbCheck = await page.evaluate(() => ({
       crumb: document.querySelector('.if816a_crumbCurrent')?.textContent?.trim() ?? null,
-      row: document.querySelector('.koUx-W_sessionRow.koUx-W_selected .koUx-W_title')?.textContent?.trim() ?? null,
+      row: document.querySelector('.dshp-sessionRow.dshp-selected .dshp-title')?.textContent?.trim() ?? null,
     }))
     first.crumb = crumbCheck
     if (!crumbCheck.crumb) problems.push('主视图没有面包屑标题')
@@ -524,11 +528,11 @@ try {
   // 排除标题「新会话」的当前 blank 行——它的显隐受 currentBlankId 影响会抖）
   const countUngrouped = () =>
     page.evaluate(() => {
-      for (const row of document.querySelectorAll('.koUx-W_projectRow')) {
-        const title = row.querySelector('.koUx-W_title')?.textContent.trim()
+      for (const row of document.querySelectorAll('.dshp-projectRow')) {
+        const title = row.querySelector('.dshp-title')?.textContent.trim()
         if (title === '未分组' || title === 'Ungrouped') {
-          return [...row.parentElement.querySelectorAll('.koUx-W_sessionRow')].filter((n) => {
-            const t = n.querySelector('.koUx-W_title')?.textContent.trim() ?? ''
+          return [...row.parentElement.querySelectorAll('.dshp-sessionRow')].filter((n) => {
+            const t = n.querySelector('.dshp-title')?.textContent.trim() ?? ''
             return t !== '新会话' && t !== 'New session'
           }).length
         }
@@ -537,7 +541,7 @@ try {
     })
   const ungroupedBefore = await countUngrouped()
   const plusClicked = await page.evaluate(() => {
-    const projectRow = document.querySelector('[data-pb-target="1"]') ?? document.querySelector('.dshp-tag')?.closest('.koUx-W_projectRow')
+    const projectRow = document.querySelector('[data-pb-target="1"]') ?? document.querySelector('.dshp-tag')?.closest('.dshp-projectRow')
     const button = projectRow?.querySelector('button[title="新会话"], button[title="新建会话"]')
     if (!button) return false
     button.click()
