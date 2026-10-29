@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 /**
- * UI 自检：起 headless Chrome，登录本地 dsh web 实例，点开远端会话，截图并给出断言。
+ * UI 自检（联邦版）：官方侧栏里是否出现远端组、点开远端会话后官方中栏是否渲染远端正文。
  *
  * 用法：
- *   node scripts/ui-check.mjs                     # 全量：含远端新建会话 + 真模型回复（≤180s）
- *   node scripts/ui-check.mjs --quick             # 快速：侧栏/远端行/菜单/正文渲染，不发消息
- *   node scripts/ui-check.mjs --base <url>        # 显式给带 token 的 URL
+ *   node scripts/ui-check.mjs            # 发布前全量：含远端新建会话 + 发消息（≤180s）
+ *   node scripts/ui-check.mjs --quick    # 日常：只验树与打开会话（约 40s）
+ *   node scripts/ui-check.mjs --base <url>
  *
- * 产物：.workbuddy/tmp/ui-*.png
+ * 产物：.workbuddy/tmp/ui-1-sidebar.png、ui-2-remote-expanded.png、ui-3-remote-session.png、
+ *       ui-4-remote-new.png、ui-5-remote-terminal.png、ui-check.json
  * 退出码：0 通过；1 有断言失败或页面报错
  */
 import fs from 'node:fs'
@@ -21,6 +22,15 @@ const ROOT = path.resolve(import.meta.dirname, '..')
 const OUT = path.join(ROOT, '.workbuddy/tmp')
 fs.mkdirSync(OUT, { recursive: true })
 
+// 联邦模式下不再影子替换，官方那条冲突噪声不会出现；Immer nr:2 是既有噪声（合成
+// retention 的订阅），404 是 favicon 之类，均不影响功能。
+const KNOWN_NOISE = [
+  /\[Immer\]/,
+  /\[client-store\] subscriber failed/,
+  /Failed to load resource: the server responded with a status of 404/,
+  /single slot "sidebar\.workspaces" already has a registration/,
+]
+
 function readBase() {
   const index = process.argv.indexOf('--base')
   if (index !== -1 && process.argv[index + 1]) return process.argv[index + 1]
@@ -31,24 +41,9 @@ function readBase() {
   return match[0]
 }
 
-// 已知噪声：顶替 single slot 时，官方那条注册会报同优先级冲突；我们这条后注册、渲染生效。
-// 这是「遮蔽成功」的副作用，不影响功能，但记录在 ui-check.json 里备查。
-const KNOWN_NOISE = [
-  /single slot "sidebar\.workspaces" already has a registration at priority/,
-  /Failed to load resource: the server responded with a status of 404/,
-  /\[client-store\] subscriber failed/,
-  /\[Immer\]/,
-]
-
 const problems = []
-const warnings = []
 const base = readBase()
-// 快速档：只验浏览器侧渲染与交互，不建会话、不发消息、不调真实模型。
 const QUICK = process.argv.includes('--quick')
-// `--cdp http://127.0.0.1:9224` 连一个已在跑的 Chrome：
-// 代理沙箱把 RLIMIT_AS 卡在 4GB，直接 launch 会 core dump；
-// 用 `systemd-run --user ... google-chrome-stable --headless=new
-// --remote-debugging-port=9224` 起浏览器再连即可（脚本结尾不能 close）。
 const cdpIndex = process.argv.indexOf('--cdp')
 const cdpUrl = cdpIndex !== -1 ? process.argv[cdpIndex + 1] : null
 const browser = cdpUrl
@@ -58,11 +53,42 @@ const browser = cdpUrl
       headless: 'new',
       args: ['--no-sandbox', '--disable-gpu', '--hide-scrollbars', '--font-render-hinting=none'],
     })
-const usingCdp = Boolean(cdpUrl)
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/** 轮询直到 predicate 返回真值或超时。 */
+async function until(label, predicate, timeoutMs = 20000, intervalMs = 250) {
+  const started = Date.now()
+  for (;;) {
+    const value = await predicate()
+    if (value) return value
+    if (Date.now() - started > timeoutMs) throw new Error(`等待超时：${label}`)
+    await sleep(intervalMs)
+  }
+}
 
 try {
   const page = await browser.newPage()
   await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 })
+
+  // 记录插件 RPC 的实际结果：发送/新建这类断言不能依赖 innerText
+  // （官方滚动容器里的正文不一定出现在 body.innerText 里）。
+  await page.evaluateOnNewDocument(() => {
+    const original = window.fetch
+    window.__DSH_PB_REQUESTS__ = []
+    window.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input?.url ?? ''
+      const response = await original(input, init)
+      if (init && init.method === 'POST' && url.includes('/dsh-peerbar/api/')) {
+        response
+          .clone()
+          .json()
+          .then((payload) => window.__DSH_PB_REQUESTS__.push({ url, body: String(init.body ?? ''), payload }))
+          .catch(() => {})
+      }
+      return response
+    }
+  })
 
   const consoleErrors = []
   page.on('console', (message) => {
@@ -71,665 +97,296 @@ try {
   page.on('pageerror', (error) => consoleErrors.push(String(error)))
 
   await page.goto(base, { waitUntil: 'networkidle2', timeout: 40000 })
-  await page.waitForSelector('.dshp-root', { timeout: 20000 })
-  // 会话行异步进树（本机会话列表加载 + 远端探活），等行出现再取快照，最多 5s
-  for (let i = 0; i < 10; i += 1) {
-    const rows = await page.evaluate(() => document.querySelectorAll('.dshp-sessionRow').length)
-    if (rows > 0) break
-    await new Promise((resolve) => setTimeout(resolve, 500))
-  }
-  await new Promise((resolve) => setTimeout(resolve, 300))
+  // 官方树会异步出本机工作区，远端组要等第一轮 /state 回来（5s 内）。
+  await until('侧栏出现工作区行', () => page.evaluate(() => document.querySelectorAll('[data-row-key^="workspace:"]').length > 0), 30000)
+  // 远端组要等第一轮 /state（5s 内）投影进 store
+  await sleep(6000)
 
-  const first = await page.evaluate(() => {
-    const rows = [...document.querySelectorAll('.dshp-projectRow')]
-    const session = document.querySelector('.dshp-sessionRow')
-    const tree = document.querySelector('.dshp-root')
-    return {
-      projectRows: rows.length,
-      sessionRows: document.querySelectorAll('.dshp-sessionRow').length,
-      remoteTags: [...document.querySelectorAll('.dshp-tag')].map((node) => node.textContent),
-      firstGroups: rows.slice(0, 5).map((node) => node.innerText.replace(/\s+/g, ' ').trim()),
-      // 原生：blank 行标题是「新会话」，未命名回退是「未命名」
-      blankRows: [...document.querySelectorAll('.dshp-sessionRow .dshp-title')].filter(
-        (node) => node.textContent.trim() === '新会话',
-      ).length,
-      untitledRows: [...document.querySelectorAll('.dshp-sessionRow .dshp-title')].filter(
-        (node) => node.textContent.trim() === '未命名',
-      ).length,
-      menuButtons: document.querySelectorAll('.dshp-rowActions button').length,
-      // 原生行内 ⋯ 只给 aria，不给 title tooltip
-      sessionMenuAria: document.querySelector('.dshp-sessionRow .dshp-rowActions button')?.getAttribute('aria-label') ?? null,
-      projectMenuAria: document.querySelector('.dshp-projectRow .dshp-rowActions button')?.getAttribute('aria-label') ?? null,
-      sessionMenuTitle: document.querySelector('.dshp-sessionRow .dshp-rowActions button')?.getAttribute('title') ?? null,
-      // 原生分组标题栏：36px 高、标题 14px、搜索按钮 28×28
-      headerHeight: (() => {
-        const el = document.querySelector('.dshp-sectionHeader')
-        return el ? Math.round(el.getBoundingClientRect().height) : null
-      })(),
-      sectionLabelSize: (() => {
-        const el = document.querySelector('.dshp-sectionLabel')
-        return el ? getComputedStyle(el).fontSize : null
-      })(),
-      searchButton: (() => {
-        const el = document.querySelector('.dshp-searchButton')
-        if (!el) return null
-        const r = el.getBoundingClientRect()
-        return `${Math.round(r.width)}x${Math.round(r.height)}`
-      })(),
-      folderActive: document.querySelectorAll('.dshp-projectRow .dshp-folderActive').length,
-      selectedRowActiveFolder: (() => {
-        const selected = document.querySelector('.dshp-sessionRow.dshp-selected')
-        if (!selected) return null
-        const group = selected.parentElement?.parentElement
-        return Boolean(group?.querySelector('.dshp-projectRow .dshp-folderActive'))
-      })(),
-      overflowLabel: document.querySelector('.dshp-sessionOverflowButton')?.textContent?.trim() ?? null,
-      // 原生 idle 行走 sidebar.session.row.leading 空槽，不画状态点
-      idleDots: document.querySelectorAll('.dshp-sessionRow .dshp-slot [data-state="idle"]').length,
-      idleSlotWidth: (() => {
-        const slot = document.querySelector('.dshp-sessionRow .dshp-slot')
-        return slot ? Math.round(slot.getBoundingClientRect().width) : null
-      })(),
-      // 原生行几何：padding-left 8px（顶层工作区 depth=0），标题距行左 8+16+4=28
-      sessionTitleOffset: (() => {
-        if (!session) return null
-        const title = session.querySelector('.dshp-title')
-        return title ? Math.round(title.getBoundingClientRect().left - session.getBoundingClientRect().left) : null
-      })(),
-      sessionPaddingLeft: session ? getComputedStyle(session).paddingLeft : null,
-      treeHeight: tree ? tree.getBoundingClientRect().height : 0,
-      // 侧栏根内不应再出现官方构建期哈希类名（回归：新代码又复制了官方 class）
-      foreignClasses:
-        document.querySelector('.dshp-root')?.querySelectorAll('[class*="koUx-W_"], [class*="hP3ldq_"]').length ?? 0,
+  /** 从页面里读 Host 名单（组名后缀是 `名字 · 主机名`）。 */
+  const hostNames = await page.evaluate(async () => {
+    try {
+      const response = await fetch('/dsh-peerbar/api/state', { credentials: 'same-origin' })
+      const payload = await response.json()
+      return (payload?.hosts ?? []).map((host) => host.name).filter((name) => typeof name === 'string' && name)
+    } catch {
+      return []
     }
   })
+  if (hostNames.length === 0) problems.push('没有读到任何 Host（/state.hosts 为空）')
 
+  const readTree = () =>
+    page.evaluate((names) => {
+      const rows = [...document.querySelectorAll('[data-row-key^="workspace:"], [data-row-key^="session:"]')]
+      const groups = []
+      const sessions = []
+      for (const row of rows) {
+        const text = (row.innerText ?? '').replace(/\s+/g, ' ').trim()
+        const key = row.getAttribute('data-row-key') ?? ''
+        const isGroup = key.startsWith('workspace:')
+        const host = names.find((name) => text.endsWith(` · ${name}`))
+        const entry = {
+          key,
+          text,
+          host: host ?? null,
+          expanded: row.getAttribute('aria-expanded'),
+          selected: /selected|selectedRow/i.test(row.className) || row.getAttribute('aria-selected') === 'true',
+        }
+        if (isGroup) groups.push(entry)
+        else sessions.push(entry)
+      }
+      return {
+        groups,
+        sessions,
+        // 影子树的类名不该再出现（出现说明回退到了自绘）
+        shadowRows: document.querySelectorAll('.dshp-sessionRow').length,
+        composer: Boolean(document.querySelector('textarea, [contenteditable="true"]')),
+        body: (document.body.innerText ?? '').slice(0, 4000),
+      }
+    }, hostNames)
+
+  // ---- 1) 树的形态 ----
+  const tree = await readTree()
+  const remoteGroups = tree.groups.filter((group) => group.host)
+  const localGroups = tree.groups.filter((group) => !group.host)
+  const first = {
+    hostNames,
+    localGroups: localGroups.map((group) => group.text),
+    remoteGroups: remoteGroups.map((group) => group.text),
+    shadowRows: tree.shadowRows,
+  }
   await page.screenshot({ path: path.join(OUT, 'ui-1-sidebar.png') })
 
-  if (first.projectRows === 0) problems.push('侧栏没有任何工作区行（.dshp-projectRow 为 0）')
-  if (first.sessionRows === 0) problems.push('侧栏没有任何会话行（.dshp-sessionRow 为 0）')
-  if (first.foreignClasses > 0) problems.push(`侧栏仍引用官方哈希类名 ${first.foreignClasses} 处`)
-  if (first.remoteTags.length === 0) problems.push('侧栏没有远端 Host 标签（.dshp-tag）')
-  // 原生 `--dsh-workspace-indent` 是 depth*12，顶层工作区下的会话是 0 → padding-left 8px，
-  // 标题距行左 8 + slot 16 + margin 4 = 28。
-  if (first.sessionPaddingLeft && first.sessionPaddingLeft !== '8px') {
-    problems.push(`会话行 padding-left 应为 8px（原生顶层 depth=0），实际 ${first.sessionPaddingLeft}`)
+  if (tree.shadowRows > 0) problems.push(`仍出现影子树行（.dshp-sessionRow × ${tree.shadowRows}），说明没有走官方侧栏`)
+  if (localGroups.length === 0) problems.push('侧栏没有本机工作区行')
+  if (remoteGroups.length === 0) problems.push('侧栏没有远端组（组名应以「 · 主机名」结尾）')
+  if (remoteGroups.length > 0 && localGroups.length > 0) {
+    const lastLocal = tree.groups.map((group) => group.host).lastIndexOf(null)
+    const firstRemote = tree.groups.findIndex((group) => group.host)
+    if (firstRemote < lastLocal) problems.push('远端组排在本机组前面了（要求本机在前、远端接后）')
   }
-  if (first.sessionTitleOffset !== null && first.sessionTitleOffset !== 28) {
-    problems.push(`会话标题距行左应为 28px（原生 8+16+4），实际 ${first.sessionTitleOffset}px`)
-  }
-  if (first.menuButtons === 0) problems.push('行内没有任何菜单按钮（.dshp-rowActions button 为 0）')
-  // 原生 blank 行只显示“当前选中”的那一条
-  if (first.blankRows > 1) problems.push(`blank 行最多 1 条（原生只显示当前选中的），实际 ${first.blankRows}`)
-  // aria 文案与原生一致：会话“名”的操作 / 工作区“名”的操作；且不挂 title
-  if (first.sessionMenuAria && !/^会话“.+”的操作$/.test(first.sessionMenuAria)) {
-    problems.push(`会话行 ⋯ 的 aria 应为「会话“名”的操作」，实际「${first.sessionMenuAria}」`)
-  }
-  if (first.projectMenuAria && !/^工作区“.+”的操作$/.test(first.projectMenuAria)) {
-    problems.push(`工作区行 ⋯ 的 aria 应为「工作区“名”的操作」，实际「${first.projectMenuAria}」`)
-  }
-  if (first.sessionMenuTitle !== null) problems.push('会话行 ⋯ 不应挂 title tooltip（原生只有 aria）')
-  // 同一时刻只应有一个“当前工作区”，且它必须包含选中的会话
-  if (first.folderActive > 1) problems.push(`当前工作区高亮最多 1 个，实际 ${first.folderActive}`)
-  if (first.selectedRowActiveFolder === false) {
-    problems.push('选中的会话所在工作区的文件夹没有高亮（dshp-folderActive）')
-  }
-  // 标题栏几何对齐原生（36px / 14px / 28×28）
-  if (first.headerHeight !== null && first.headerHeight !== 36) {
-    problems.push(`分组标题栏高度应为 36px（实际 ${first.headerHeight}）`)
-  }
-  if (first.sectionLabelSize && first.sectionLabelSize !== '14px') {
-    problems.push(`「工作区」标题字号应为 14px（实际 ${first.sectionLabelSize}）`)
-  }
-  if (first.searchButton && first.searchButton !== '28x28') {
-    problems.push(`搜索按钮应为 28×28（实际 ${first.searchButton}）`)
-  }
-  if (first.idleDots > 0) problems.push(`idle 行不该画状态点（实际 ${first.idleDots} 个），原生只有在途/完成态才画`)
-  if (first.idleSlotWidth !== null && first.idleSlotWidth !== 16) {
-    problems.push(`不画点后 slot 仍应占 16px（实际 ${first.idleSlotWidth}px）`)
-  }
-  if (first.overflowLabel && !/^展开其余 \d+ 个会话$/.test(first.overflowLabel)) {
-    problems.push(`溢出按钮文案应为「展开其余 N 个会话」（实际「${first.overflowLabel}」）`)
+  const hostsSeen = new Set(remoteGroups.map((group) => group.host))
+  if (hostNames.length > 1 && hostsSeen.size < hostNames.length) {
+    problems.push(`只有 ${hostsSeen.size}/${hostNames.length} 台 Host 出现在侧栏`)
   }
 
-  // 行菜单：先 hover 出 ⋯，再点开，确认菜单项与定位
-  const menuItemsOf = async () => {
-    return page.evaluate(() => {
-      const candidates = [...document.querySelectorAll('[role="menuitem"], [role="menu"] button')]
-      return candidates.map((node) => node.textContent.trim()).filter(Boolean)
-    })
+  // ---- 2) 展开第一个远端组 ----
+  const firstRemoteKey = remoteGroups[0]?.key
+  if (firstRemoteKey) {
+    await page.evaluate((key) => {
+      const row = document.querySelector(`[data-row-key="${key}"]`)
+      row?.click()
+    }, firstRemoteKey)
+    await sleep(900)
   }
-  if (await page.$('.dshp-sessionRow')) {
-    await page.hover('.dshp-sessionRow')
-    const hoverButtons = await page.evaluate(
-      () => document.querySelectorAll('.dshp-sessionRow .dshp-rowActions button').length,
-    )
-    first.hoverButtons = hoverButtons
-    if (hoverButtons < 3) problems.push(`会话行 hover 按钮不足 3 个（实际 ${hoverButtons}）`)
-    // 图标度量：原生会话行是 16×16 按钮 + 14px 图标 + 15px 间距
-    // （ui-workspace `ArchiveSessionRowButton` / `PinSessionRowButton` 与 Rows.module.css）。
-    // 归档图标的 artwork 默认 size=20，不显式传 14 会被 16px 按钮压成 16×20、纵向拉长。
-    const iconMetrics = await page.evaluate(() => {
-      const row = document.querySelector('.dshp-sessionRow')
-      const actions = row?.querySelector('.dshp-rowActions')
-      if (!actions) return null
-      return {
-        gap: getComputedStyle(actions).gap,
-        items: [...actions.querySelectorAll('button')].map((button) => {
-          const box = button.getBoundingClientRect()
-          const svg = button.querySelector('svg')?.getBoundingClientRect()
-          return {
-            label: button.getAttribute('aria-label') || button.title || '',
-            button: [Math.round(box.width), Math.round(box.height)],
-            svg: svg ? [Math.round(svg.width), Math.round(svg.height)] : null,
-          }
-        }),
-      }
-    })
-    first.iconMetrics = iconMetrics
-    if (!iconMetrics) {
-      problems.push('会话行没有行操作区（.dshp-rowActions）')
-    } else {
-      if (iconMetrics.gap !== '15px') problems.push(`行操作区间距应为 15px（实际 ${iconMetrics.gap}）`)
-      for (const item of iconMetrics.items) {
-        if (item.button[0] !== 16 || item.button[1] !== 16) {
-          problems.push(`「${item.label}」按钮应为 16×16（实际 ${item.button.join('×')}）`)
-        }
-        if (!item.svg) continue
-        if (item.svg[0] !== item.svg[1]) {
-          problems.push(`「${item.label}」图标比例失真（${item.svg.join('×')}）`)
-        }
-        if (![14, 16].includes(item.svg[0])) {
-          problems.push(`「${item.label}」图标尺寸应为 14 或 16（实际 ${item.svg[0]}）`)
-        }
-        if (/归档|置顶/.test(item.label) && item.svg[0] !== 14) {
-          problems.push(`「${item.label}」图标应与原生一致为 14px（实际 ${item.svg[0]}）`)
-        }
-      }
-    }
-    await page.click('.dshp-sessionRow .dshp-rowActions button:last-child')
-    await new Promise((resolve) => setTimeout(resolve, 500))
-    const menuItems = await menuItemsOf()
-    await page.screenshot({ path: path.join(OUT, 'ui-4-session-menu.png') })
-    first.menuItems = menuItems
-    for (const label of ['置顶会话', '重命名', '分叉会话', '归档会话', '复制 Session ID']) {
-      if (!menuItems.some((item) => item.startsWith(label))) problems.push(`会话菜单缺少「${label}」`)
-    }
-    for (const hint of ['CtrlAltG', 'CtrlAltF', 'CtrlShiftA']) {
-      if (!menuItems.some((item) => item.includes(hint))) problems.push(`会话菜单缺少快捷键「${hint}」`)
-    }
-    // 指针移进菜单后不应关闭（回归：closeOnPointerLeave 曾导致一移就消失）
-    if (menuItems.length > 0) {
-      await page.hover('[role="menuitem"]')
-      await new Promise((resolve) => setTimeout(resolve, 300))
-      const still = await menuItemsOf()
-      if (still.length < menuItems.length) problems.push('指针移到菜单上后菜单消失了')
-    }
-    await page.keyboard.press('Escape')
-    await new Promise((resolve) => setTimeout(resolve, 200))
-  }
-  // 视图选项菜单（S5）
-  const hasViewButton = await page.evaluate(() => {
-    const buttons = [...document.querySelectorAll('.dshp-headerButton')]
-    const button = buttons.find((node) => (node.title || '').includes('视图'))
-    if (!button) return false
-    button.click()
-    return true
-  })
-  if (hasViewButton) {
-    await new Promise((resolve) => setTimeout(resolve, 500))
-    const items = await menuItemsOf()
-    await page.screenshot({ path: path.join(OUT, 'ui-6-view-options.png') })
-    first.viewOptionItems = items
-    for (const label of ['按工作区', '单列表', '手动排序', '最近更新', '隐藏已归档', '全部对话', '仅显示已归档']) {
-      if (!items.some((item) => item.startsWith(label))) problems.push(`视图选项缺少「${label}」`)
-    }
-    // 分组/排序/筛选是菜单里的 label 行（不是 menuitem），用整段文本核对
-    const menuLabels = await page.evaluate(() => document.querySelector('[role="menu"]')?.innerText ?? '')
-    first.viewOptionLabels = menuLabels.replace(/\s+/g, ' ').slice(0, 160)
-    for (const label of ['分组方式', '排序方式', '筛选会话']) {
-      if (!menuLabels.includes(label)) problems.push(`视图选项缺少分组标题「${label}」`)
-    }
-    await page.keyboard.press('Escape')
-    await new Promise((resolve) => setTimeout(resolve, 200))
-  } else {
-    problems.push('头部没有视图选项按钮')
-  }
-
-  // 单列表回归：本机会话平铺后，远端组仍必须在同一棵树里；再切回按工作区。
-  const viewButtonSelector = '.dshp-headerActions button:last-child'
-  if (await page.$(viewButtonSelector)) {
-    const countsOf = () =>
-      page.evaluate(() => ({
-        projectRows: document.querySelectorAll('.dshp-projectRow').length,
-        sessionRows: document.querySelectorAll('.dshp-sessionRow').length,
-      }))
-    const beforeView = await countsOf()
-    await page.click(viewButtonSelector)
-    await new Promise((resolve) => setTimeout(resolve, 400))
-    const switched = await page.evaluate(() => {
-      const item = [...document.querySelectorAll('[role="menuitem"]')].find((node) => node.textContent.trim() === '单列表')
-      if (!item) return false
-      item.click()
-      return true
-    })
-    if (!switched) {
-      problems.push('视图选项里点不到「单列表」')
-    } else {
-      await new Promise((resolve) => setTimeout(resolve, 600))
-      const flatView = await countsOf()
-      first.flatView = { before: beforeView, flat: flatView }
-      if (flatView.sessionRows === 0) problems.push('单列表视图没有任何会话行')
-      if (flatView.projectRows === 0) problems.push('单列表视图下远端工作区组消失了')
-      // 切回按工作区，避免影响后续远端组用例
-      await page.click(viewButtonSelector)
-      await new Promise((resolve) => setTimeout(resolve, 400))
-      await page.evaluate(() => {
-        const item = [...document.querySelectorAll('[role="menuitem"]')].find((node) => node.textContent.trim() === '按工作区')
-        item?.click()
-      })
-      await new Promise((resolve) => setTimeout(resolve, 600))
-      const restoredView = await countsOf()
-      first.flatView.restored = restoredView
-      if (restoredView.projectRows === 0 || restoredView.sessionRows === 0) {
-        problems.push('单列表切回按工作区后侧栏没有恢复')
-      }
-    }
-  }
-
-  if (await page.$('.dshp-projectRow')) {
-    await page.hover('.dshp-projectRow')
-    await page.click('.dshp-projectRow .dshp-rowActions button:last-child')
-    await new Promise((resolve) => setTimeout(resolve, 500))
-    const items = await menuItemsOf()
-    await page.screenshot({ path: path.join(OUT, 'ui-5-workspace-menu.png') })
-    first.workspaceMenuItems = items
-    for (const label of ['重命名', '删除工作区']) {
-      if (!items.some((item) => item.startsWith(label))) problems.push(`工作区菜单缺少「${label}」`)
-    }
-    // 原生菜单项是「重命名」；「重命名工作区」只出现在对话框标题里
-    if (items.some((item) => item.trim() === '重命名工作区')) {
-      problems.push('工作区菜单的改名项应为「重命名」，不该带「工作区」')
-    }
-    await page.keyboard.press('Escape')
-    await new Promise((resolve) => setTimeout(resolve, 200))
-  }
-
-  // 远端行管理（P2/P3）：远端会话行菜单五项 + hover 三按钮 + 远端工作区菜单
-  // 远端数据会变：首个远端组可能只剩「已归档」会话（默认隐藏而变空组），
-  // 所以先展开所有远端组，再取第一个**真有可见会话行**的组作为被测目标。
-  // 目标组优先按 /state 挑「有 workspaceId 且有可见行」的组（P3 工作区菜单
-  // 需要 workspaceId；无 baseline 的退化组点开只有只读提示）。
-  const targetWs = await page.evaluate(async () => {
-    const res = await fetch('/dsh-peerbar/api/state')
-    const state = await res.json()
-    for (const host of state.hosts ?? []) {
-      if (host.status !== 'online') continue
-      for (const ws of host.workspaces ?? []) {
-        const visible = (ws.sessions ?? []).filter((s) => !s.blank && s.archived !== true)
-        if (ws.workspaceId && visible.length > 0) {
-          return { name: ws.name, hostId: host.hostId, visible: visible.length }
-        }
-      }
-    }
-    return null
-  })
-  first.targetWorkspace = targetWs?.name ?? null
-  await page.evaluate((name) => {
-    if (!name) return
-    for (const row of document.querySelectorAll('.dshp-projectRow')) {
-      const tag = row.querySelector('.dshp-tag')
-      const title = row.querySelector('.dshp-title')
-      if (tag && title && title.textContent.trim() === name) {
-        row.setAttribute('data-pb-target', '1')
-        return
-      }
-    }
-  }, targetWs?.name)
-  await page.evaluate(() => {
-    for (const tag of document.querySelectorAll('.dshp-tag')) {
-      const row = tag.closest('.dshp-projectRow')
-      if (row && row.getAttribute('aria-expanded') !== 'true') row.click()
-    }
-  })
-  await new Promise((resolve) => setTimeout(resolve, 800))
-  const remoteMenu = await page.evaluate(() => {
-    const groups = [...document.querySelectorAll('.dshp-tag')]
-      .map((tag) => tag.closest('.dshp-projectRow')?.parentElement)
-      .filter(Boolean)
-    const group = document.querySelector('[data-pb-target="1"]')?.parentElement
-      ?? groups.find((node) => node.querySelector('.dshp-sessionRow'))
-    const row = group?.querySelector('.dshp-sessionRow')
-    const projectRow = group?.querySelector('.dshp-projectRow')
-    return {
-      remoteGroups: groups.length,
-      hasRemoteRow: Boolean(row),
-      hasRemoteProject: Boolean(projectRow),
-      remoteRowButtons: row ? row.querySelectorAll('.dshp-rowActions button').length : 0,
-      remoteProjectButtons: projectRow ? projectRow.querySelectorAll('.dshp-rowActions button').length : 0,
-    }
-  })
-  first.remoteGroups = remoteMenu.remoteGroups
-  first.remoteRowButtons = remoteMenu.remoteRowButtons
-  if (!remoteMenu.hasRemoteRow) {
-    problems.push('远端组展开后没有会话行')
-  } else {
-    if (remoteMenu.remoteRowButtons < 3) {
-      problems.push(`远端会话行 hover 按钮不足 3 个（实际 ${remoteMenu.remoteRowButtons}）`)
-    }
-    // 打开远端会话行菜单
-    await page.evaluate(() => {
-      const groups = [...document.querySelectorAll('.dshp-tag')]
-        .map((tag) => tag.closest('.dshp-projectRow')?.parentElement)
-        .filter(Boolean)
-      const group = document.querySelector('[data-pb-target="1"]')?.parentElement
-        ?? groups.find((node) => node.querySelector('.dshp-sessionRow'))
-      group?.querySelector('.dshp-sessionRow .dshp-rowActions button:last-child')?.click()
-    })
-    await new Promise((resolve) => setTimeout(resolve, 500))
-    const remoteItems = await menuItemsOf()
-    await page.screenshot({ path: path.join(OUT, 'ui-7-remote-session-menu.png') })
-    first.remoteSessionMenuItems = remoteItems
-    for (const label of ['重命名', '分叉会话', '复制 Session ID']) {
-      if (!remoteItems.some((item) => item.startsWith(label))) {
-        problems.push(`远端会话菜单缺少「${label}」（P2 对齐本地）`)
-      }
-    }
-    const hasPin = remoteItems.some((item) => item.startsWith('置顶会话') || item.startsWith('取消置顶'))
-    const hasArchive = remoteItems.some((item) => item.startsWith('归档会话') || item.startsWith('取消归档'))
-    if (!hasPin) problems.push('远端会话菜单缺少置顶/取消置顶')
-    if (!hasArchive) problems.push('远端会话菜单缺少归档/取消归档')
-    await page.keyboard.press('Escape')
-    await new Promise((resolve) => setTimeout(resolve, 200))
-  }
-  if (remoteMenu.hasRemoteProject) {
-    await page.evaluate(() => {
-      const groups = [...document.querySelectorAll('.dshp-tag')]
-        .map((tag) => tag.closest('.dshp-projectRow')?.parentElement)
-        .filter(Boolean)
-      const group = document.querySelector('[data-pb-target="1"]')?.parentElement
-        ?? groups.find((node) => node.querySelector('.dshp-sessionRow'))
-      group?.querySelector('.dshp-projectRow .dshp-rowActions button:first-child')?.click()
-    })
-    await new Promise((resolve) => setTimeout(resolve, 500))
-    const remoteWsItems = await menuItemsOf()
-    await page.screenshot({ path: path.join(OUT, 'ui-8-remote-workspace-menu.png') })
-    first.remoteWorkspaceMenuItems = remoteWsItems
-    for (const label of ['重命名', '删除工作区']) {
-      if (!remoteWsItems.some((item) => item.startsWith(label))) {
-        problems.push(`远端工作区菜单缺少「${label}」（P3）`)
-      }
-    }
-    await page.keyboard.press('Escape')
-    await new Promise((resolve) => setTimeout(resolve, 200))
-  }
-
-  // 远端组此时已全部展开；滚到第一个有可见会话行的远端组，最多试 4 条会话，
-  // 取"有真人发言/富文本"的那条截图
-  const remoteRowCount = await page.evaluate(() => {
-    const groups = [...document.querySelectorAll('.dshp-tag')]
-      .map((tag) => tag.closest('.dshp-projectRow')?.parentElement)
-      .filter(Boolean)
-    const group = groups.find((node) => node.querySelector('.dshp-sessionRow'))
-    group?.scrollIntoView({ block: 'center' })
-    return groups.reduce((sum, node) => sum + node.querySelectorAll('.dshp-sessionRow').length, 0)
-  })
-  if (remoteRowCount === 0) problems.push('远端组展开后没有会话行可点')
+  const expanded = await readTree()
+  const remoteSessions = expanded.sessions
+  first.remoteSessionRows = remoteSessions.length
   await page.screenshot({ path: path.join(OUT, 'ui-2-remote-expanded.png') })
+  if (remoteGroups.length > 0 && remoteSessions.length === 0) {
+    problems.push('第一个远端组展开后没有任何会话行')
+  }
 
-  if (remoteRowCount > 0) {
-    let panel = { chatNodes: 0, nativeTool: 0, foldRows: 0, actionBars: 0, customPanel: 0, preview: '' }
-    const groupCount = await page.evaluate(() => document.querySelectorAll('.dshp-tag').length)
-    let foundBubble = false
-    for (let group = 0; group < Math.min(groupCount, 3) && !foundBubble; group += 1) {
-      await page.evaluate((index) => {
-        const tags = document.querySelectorAll('.dshp-tag')
-        const row = tags[index]?.closest('.dshp-projectRow')
-        if (row && row.getAttribute('aria-expanded') !== 'true') row.click()
-      }, group)
-      await new Promise((resolve) => setTimeout(resolve, 400))
-      const rows = await page.evaluate((index) => {
-        const tags = document.querySelectorAll('.dshp-tag')
-        const holder = tags[index]?.closest('.dshp-projectRow')?.parentElement
-        return holder ? holder.querySelectorAll('.dshp-sessionRow').length : 0
-      }, group)
-      for (let index = 0; index < Math.min(rows, 3); index += 1) {
-        await page.evaluate(
-          ([groupIndex, rowIndex]) => {
-            const tags = document.querySelectorAll('.dshp-tag')
-            const holder = tags[groupIndex]?.closest('.dshp-projectRow')?.parentElement
-            holder?.querySelectorAll('.dshp-sessionRow')[rowIndex]?.click()
-          },
-          [group, index],
-        )
-        await page.waitForSelector('[data-chat-node-key], .dshp-panel', { timeout: 8000 })
-        await new Promise((resolve) => setTimeout(resolve, 1200))
-        const stats = await page.evaluate(() => ({
-          chatNodes: document.querySelectorAll('[data-chat-node-key]').length,
-          nativeTool: document.querySelectorAll('[data-chat-call-id]').length,
-          foldRows: document.querySelectorAll('[data-process-activity]').length,
-          actionBars: document.querySelectorAll('[class$="_actions"]').length,
-          customPanel: document.querySelectorAll('.dshp-panel').length,
-          preview: (document.querySelector('body')?.innerText ?? '').slice(0, 140),
-        }))
-        if (stats.chatNodes > panel.chatNodes) panel = stats
-        if (stats.nativeTool > 0 && stats.chatNodes > 0) break
-      }
-    }
-    await page.screenshot({ path: path.join(OUT, 'ui-3-remote-session.png'), fullPage: false })
-    first.panel = panel
-
-    // V7-1：主视图面包屑必须跟侧栏选中行同名（远端改名后不同步是 v6 的尾巴）
-    const crumbCheck = await page.evaluate(() => ({
-      crumb: document.querySelector('.if816a_crumbCurrent')?.textContent?.trim() ?? null,
-      row: document.querySelector('.dshp-sessionRow.dshp-selected .dshp-title')?.textContent?.trim() ?? null,
+  // ---- 3) 点开远端会话，官方中栏 ----
+  const targetSession = remoteSessions[0]
+  if (targetSession) {
+    first.openedSession = targetSession.text
+    const hit = await page.evaluate((key) => {
+      const row = document.querySelector(`[data-row-key="${key}"]`)
+      if (!row) return 'missing'
+      row.click()
+      return 'clicked'
+    }, targetSession.key)
+    first.openClick = hit
+    // 会话视图的标志是「对话 / 轨迹」页签；正文再过一小会儿 hydrate 进来。
+    const sessionOpened = await until(
+      '中栏切到会话视图',
+      () =>
+        page.evaluate(() => ({
+          ok: Boolean(document.querySelector('textarea, [contenteditable="true"]')) && /轨迹/.test(document.body.innerText ?? ''),
+        })).then((state) => state.ok),
+      20000,
+    ).catch(() => false)
+    first.sessionViewOpened = sessionOpened
+    if (!sessionOpened) problems.push('点开远端会话后中栏没有切到会话视图（20s）')
+    const hydrated = await until(
+      '远端会话正文',
+      // CSS Module 类名带语义前缀（`_markdown_1ypvv_5`），比构建期哈希稳定
+      () => page.evaluate(() => document.querySelectorAll('[class*="markdown" i]').length > 0),
+      20000,
+    ).catch(() => false)
+    first.sessionHydrated = hydrated
+    if (sessionOpened && !hydrated) problems.push('远端会话正文没有 hydrate 出来（20s）')
+    const opened = await page.evaluate(() => ({
+      composer: Boolean(document.querySelector('textarea, [contenteditable="true"]')),
+      markdown: document.querySelectorAll('[class*="markdown" i]').length,
+      bodyLength: (document.body.innerText ?? '').length,
+      body: (document.body.innerText ?? '').slice(-1500),
     }))
-    first.crumb = crumbCheck
-    if (!crumbCheck.crumb) problems.push('主视图没有面包屑标题')
-    else if (crumbCheck.row && crumbCheck.crumb !== crumbCheck.row) {
-      problems.push(`面包屑与侧栏选中行不一致：${crumbCheck.crumb} / ${crumbCheck.row}`)
-    }
-
-    if (panel.chatNodes === 0) problems.push('原生会话没有渲染任何聊天节点')
-    if (panel.nativeTool === 0) problems.push('原生会话没有工具调用节点')
-    if (panel.foldRows === 0) problems.push('原生会话没有折叠行（过程组）')
-    if (panel.customPanel > 0) problems.push('回退到了自绘面板，原生渲染未生效')
-    if (panel.actionBars === 0) problems.push('原生消息没有动作条')
+    first.openedBodyLength = opened.bodyLength
+    first.openedBodyTail = opened.body.slice(-400)
+    if (!opened.composer) problems.push('远端会话打开后没有 composer')
+    await page.screenshot({ path: path.join(OUT, 'ui-3-remote-session.png') })
   }
 
-  if (QUICK) {
-    // 快速档：只验「远端会话能打开 + 原生 composer 在」，不建会话、不发消息。
-    // 下面的全量块会往远端写数据，所以整块跳过（保持缩进不动，减少 diff）。
-    const composer = await page.$('div.B2HNUa_input[role="textbox"]')
-    if (!composer) problems.push('远端会话没有原生 composer（--quick）')
-    first.composerPresent = Boolean(composer)
-  } else {
-  // P4/P6 浏览器级：远端新建会话 → composer 发消息 → 远端真跑 → 模型座可切
-  // （用「+」新建的测试会话，不污染真实会话；结束后归档清理）
-  // 门禁：必须确认 session/create 真的发生了（捕获到返回的 sessionId）才允许打字，
-  // 否则会把消息打进已打开的真实会话（事故教训）。
-  let testSessionId = null
-  let testHostId = null
-  page.on('response', async (response) => {
-    try {
-      const url = response.url()
-      if (!url.includes('/rpc')) return
-      const hostMatch = url.match(/\/hosts\/([^/]+)\/rpc/)
-      const payload = await response.json()
-      if (payload?.value?.sessionId && hostMatch) {
-        testSessionId = payload.value.sessionId
-        testHostId = decodeURIComponent(hostMatch[1])
-      }
-    } catch {
-      /* 忽略 */
-    }
-  })
-  // 影子副本回归断言：点开远端会话前后，本机「未分组」行数不得增加
-  // （打开远端会话会往 useSessions 注入 __peerbar 行，绝不能渲染进本机侧栏；
-  // 排除标题「新会话」的当前 blank 行——它的显隐受 currentBlankId 影响会抖）
-  const countUngrouped = () =>
-    page.evaluate(() => {
-      for (const row of document.querySelectorAll('.dshp-projectRow')) {
-        const title = row.querySelector('.dshp-title')?.textContent.trim()
-        if (title === '未分组' || title === 'Ungrouped') {
-          return [...row.parentElement.querySelectorAll('.dshp-sessionRow')].filter((n) => {
-            const t = n.querySelector('.dshp-title')?.textContent.trim() ?? ''
-            return t !== '新会话' && t !== 'New session'
-          }).length
-        }
-      }
-      return 0
-    })
-  const ungroupedBefore = await countUngrouped()
-  const plusClicked = await page.evaluate(() => {
-    const projectRow = document.querySelector('[data-pb-target="1"]') ?? document.querySelector('.dshp-tag')?.closest('.dshp-projectRow')
-    const button = projectRow?.querySelector('button[title="新会话"], button[title="新建会话"]')
-    if (!button) return false
-    button.click()
-    return true
-  })
-  if (!plusClicked) {
-    problems.push('远端工作区行没有「新建会话」按钮（P3）')
-  } else {
-    // 等 session/create 的响应（≤5s）
-    for (let i = 0; i < 10 && !testSessionId; i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 500))
-    }
-    if (!testSessionId) {
-      problems.push('「新建会话」没有真正创建远端会话（P3 session/create）')
-    } else {
-      await page.waitForSelector('div.B2HNUa_input[role="textbox"]', { timeout: 10000 })
-      await new Promise((resolve) => setTimeout(resolve, 800))
-      // 发一条带唯一标记的 prompt（回复应为纯标记文本）
-      await page.click('div.B2HNUa_input[role="textbox"]')
-      await page.keyboard.type('请只回复四个字母：ZQVX，不要任何其他内容')
-      await page.keyboard.press('Enter')
-      await new Promise((resolve) => setTimeout(resolve, 1500))
-      const echoed = await page.evaluate(() => (document.body.innerText ?? '').includes('ZQVX'))
-      if (!echoed) problems.push('composer 发送后没有出现消息气泡（P4 echo/append）')
-      await page.screenshot({ path: path.join(OUT, 'ui-9-remote-chat.png') })
-      // 影子副本断言：打开远端会话后本机未分组不得多出行
-      const ungroupedAfter = await countUngrouped()
-      first.ungroupedShadow = { before: ungroupedBefore, after: ungroupedAfter }
-      if (ungroupedAfter > ungroupedBefore) {
-        problems.push(`本机「未分组」出现远端会话影子副本（${ungroupedBefore} → ${ungroupedAfter} 行）`)
-      }
-      // 等远端真跑出回复（≤180s，High 推理档思考可超 2 分钟）：
-      // 出现一个纯 ZQVX 的叶子文本节点即为回复
-      let replied = false
-      for (let i = 0; i < 90; i += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 2000))
-        replied = await page.evaluate(() =>
-          [...document.querySelectorAll('p, span, div')].some(
-            (n) => n.children.length === 0 && n.textContent.trim() === 'ZQVX',
-          ),
-        )
-        if (replied) break
-      }
-      first.remoteReply = replied
-      if (!replied) problems.push('远端回复未在 180s 内出现（P4 续聊链路）')
-      await page.screenshot({ path: path.join(OUT, 'ui-9b-remote-reply.png') })
-
-      // P6：模型座可打开并列出模型
-      const seatClicked = await page.evaluate(() => {
-        const seat = document.querySelector('button.YtWLma_trigger')
-        if (!seat) return false
-        seat.click()
-        return true
-      })
-      if (!seatClicked) problems.push('模型座按钮不存在（P6）')
-      else {
-        await new Promise((resolve) => setTimeout(resolve, 800))
-        const modelMenu = await page.evaluate(() => {
-          const items = [
-            ...document.querySelectorAll('[role="menuitem"], [role="option"]'),
-          ].map((n) => n.textContent.trim()).filter((t) => t && t.length < 60)
-          const layers = [...document.querySelectorAll('[role="menu"], [role="listbox"], [role="dialog"]')]
-            .map((n) => n.innerText.trim()).filter(Boolean)
-          return { items: items.slice(0, 10), layerText: layers.join(' | ').slice(0, 200) }
-        })
-        first.modelMenuItems = modelMenu.items
-        first.modelMenuLayer = modelMenu.layerText
-        await page.screenshot({ path: path.join(OUT, 'ui-10-model-seat.png') })
-        if (modelMenu.items.length === 0 && !modelMenu.layerText) {
-          problems.push('模型座点开后没有模型条目（P6 modelCatalog 路由）')
-        }
-        await page.keyboard.press('Escape')
-      }
-    }
-
-    // 清理：归档测试会话（P2 能力顺带回归）
-    if (testSessionId && testHostId) {
-      await page.evaluate(
-        async ([hostId, sessionId]) => {
-          await fetch(`/dsh-peerbar/api/hosts/${encodeURIComponent(hostId)}/rpc`, {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'content-type': 'application/json', 'x-dsh-peerbar-action': '1' },
-            body: JSON.stringify({ endpoint: 'workspace/archiveSession', args: { request: { sessionId, stopActivity: true } } }),
-          })
-        },
-        [testHostId, testSessionId],
+  // ---- 4) 本机会话没有回归：展开本机组，点它新出现的会话行 ----
+  const localGroupKey = localGroups[0]?.key
+  let localSessionOpened = null
+  if (localGroupKey) {
+    const before = await page.evaluate(() => [...document.querySelectorAll('[data-row-key^="session:"]')].map((row) => row.getAttribute('data-row-key')))
+    await page.evaluate((key) => document.querySelector(`[data-row-key="${key}"]`)?.click(), localGroupKey)
+    await sleep(1500)
+    localSessionOpened = await page.evaluate((seen) => {
+      const row = [...document.querySelectorAll('[data-row-key^="session:"]')].find(
+        (node) => !seen.includes(node.getAttribute('data-row-key')),
       )
-      first.testSessionCleanup = true
-    } else {
-      first.testSessionCleanup = false
-    }
-  }
+      if (!row) return null
+      row.click()
+      return row.innerText.trim()
+    }, before)
+    await sleep(2500)
+    const localBody = await page.evaluate(() => (document.body.innerText ?? '').slice(0, 2000))
+    first.localSessionOpened = localSessionOpened
+    first.localBodyLength = localBody.length
+    if (localSessionOpened && localBody.length < 200) problems.push('打开本机会话后页面内容异常')
+  } else {
+    problems.push('找不到本机工作区行')
   }
 
-  // V8：远端终端。官方右侧栏终端面板必须能穿过本机插件连到远端 PTY。
-  // 只跑 `echo`，不碰模型、不污染会话正文；跑完关掉标签页回收远端进程。
-  if (remoteRowCount > 0) {
+  // ---- 5) 全量：远端新建会话 + 发消息（证明写操作在远端） ----
+  if (!QUICK && firstRemoteKey) {
+    const beforeKeys = await page.evaluate(() => [...document.querySelectorAll('[data-row-key^="session:"]')].map((row) => row.getAttribute('data-row-key')))
+    const made = await page.evaluate((key) => {
+      const row = document.querySelector(`[data-row-key="${key}"]`)
+      row?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+      const button = row?.querySelector('button[aria-label*="新建会话"]')
+      if (!button) return false
+      button.click()
+      return true
+    }, firstRemoteKey)
+    first.remoteCreateClicked = made
+    if (!made) problems.push('远端组上没有「新建会话」按钮')
+    if (made) {
+      // 新会话必须出现在**这个远端组**下（出现在本机组说明拿远端 cwd 建了本地会话）
+      const created = await until(
+        '远端新会话出现在该组下',
+        () =>
+          page.evaluate(
+            ([key, seen]) => {
+              const row = [...document.querySelectorAll('[data-row-key^="session:"]')].find(
+                (node) => !seen.includes(node.getAttribute('data-row-key')),
+              )
+              if (!row) return null
+              const group = row.closest('[data-row-key^="workspace:"]')
+              return {
+                key: row.getAttribute('data-row-key'),
+                text: row.innerText.replace(/\s+/g, ' ').trim(),
+                groupKey: group?.getAttribute('data-row-key') ?? null,
+              }
+            },
+            [firstRemoteKey, beforeKeys],
+          ).catch(() => null),
+        20000,
+      ).catch(() => false)
+      first.remoteCreated = created
+      if (!created) problems.push('在远端组新建会话后，组里没有出现新会话行')
+      await page.screenshot({ path: path.join(OUT, 'ui-4-remote-new.png') })
+
+      // 会话视图起来 + composer 可写
+      const viewReady = await until(
+        '新会话视图',
+        () => page.evaluate(() => /轨迹/.test(document.body.innerText ?? '')),
+        15000,
+      ).catch(() => false)
+      if (!viewReady) problems.push('远端新会话没有在中栏打开')
+
+      const box = await page.$('textarea, [contenteditable="true"]')
+      if (!box) {
+        problems.push('远端新会话没有 composer')
+      } else {
+        await box.click()
+        await page.keyboard.type('只回复两个字：收到')
+        await page.keyboard.press('Enter')
+        const sent = await until(
+          '远端接受 session/prompt',
+          () =>
+            page.evaluate(() =>
+              (window.__DSH_PB_REQUESTS__ ?? []).some(
+                (entry) => /session\/prompt/.test(entry.body ?? '') && entry.payload?.ok === true,
+              ),
+            ),
+          20000,
+        ).catch(() => false)
+        first.promptSent = Boolean(sent)
+        if (!sent) problems.push('发送后中栏没有出现用户消息')
+        await sleep(4000)
+        await page.screenshot({ path: path.join(OUT, 'ui-5-remote-prompt.png') })
+
+        // 清理：归档这次测试会话（远端），别在列表里堆空白会话
+        if (created) {
+          const cleanup = await page.evaluate(
+            async ([sessionKey, groupKey]) => {
+              const sessionId = sessionKey.replace(/^session:/, '')
+              const match = /^workspace:peerbar:([^:]+):ws:/.exec(groupKey ?? '')
+              const hostId = match?.[1]
+              if (!hostId) return { hostId: null, ok: false }
+              const response = await fetch(`/dsh-peerbar/api/hosts/${encodeURIComponent(hostId)}/rpc`, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'content-type': 'application/json', 'x-dsh-peerbar-action': '1' },
+                body: JSON.stringify({
+                  endpoint: 'workspace/archiveSession',
+                  args: { request: { sessionId, stopActivity: true } },
+                }),
+              })
+              const payload = await response.json().catch(() => null)
+              return { hostId, ok: response.ok && payload?.ok !== false }
+            },
+            [created.key, firstRemoteKey],
+          ).catch((error) => ({ ok: false, error: String(error) }))
+          first.testSessionCleanup = cleanup
+        }
+      }
+    }
+  }
+
+  // ---- 6) 远端终端（官方右侧栏 + 插件 WS 代理） ----
+  if (targetSession) {
+    // 回到那条远端会话（可能已被上一阶段切走或折叠）
+    await page.evaluate((key) => {
+      const group = document.querySelector(`[data-row-key="${key}"]`)
+      if (group && group.getAttribute('aria-expanded') !== 'true') group.click()
+    }, firstRemoteKey)
+    await sleep(800)
+    await page.evaluate((key) => document.querySelector(`[data-row-key="${key}"]`)?.click(), targetSession.key)
+    await sleep(2000)
     await page.evaluate(() => {
-      const open = [...document.querySelectorAll('button[aria-label]')]
-        .find((button) => /打开右侧边栏|展开右侧边栏/.test(button.getAttribute('aria-label') || ''))
+      const open = [...document.querySelectorAll('button[aria-label]')].find((button) =>
+        /打开右侧边栏|展开右侧边栏/.test(button.getAttribute('aria-label') || ''),
+      )
       open?.click()
     })
-    await new Promise((resolve) => setTimeout(resolve, 1200))
-
-    const guide = await page.evaluate(() => {
-      const entry = document.querySelector('[data-sidebar-right-guide-entry="terminal"]')
-      if (!entry) return false
-      entry.click()
-      return true
+    await sleep(1200)
+    await page.evaluate(() => {
+      document.querySelector('[data-sidebar-right-guide-entry="terminal"]')?.click()
     })
-    await new Promise((resolve) => setTimeout(resolve, 1500))
-
-    const hasTerminalTab = await page.evaluate(
-      () => [...document.querySelectorAll('[data-dockkit-tab]')].some((tab) => !/开始|Start/.test(tab.textContent || '')),
-    )
-    if (!hasTerminalTab) {
-      const shellOpened = await page.evaluate(() => {
-        const button = document.querySelector('button[aria-label="选择 Shell"], button[aria-label="Select shell"]')
-        if (!button) return false
-        button.click()
-        return true
-      })
-      if (shellOpened) {
-        await new Promise((resolve) => setTimeout(resolve, 900))
-        await page.evaluate(() => {
-          const item = [...document.querySelectorAll('[role="menuitem"], [role="option"]')]
-            .find((node) => /bash/i.test(node.textContent || ''))
-          item?.click()
-        })
-      }
-    } else {
-      await page.evaluate(() => {
-        const tab = [...document.querySelectorAll('[data-dockkit-tab]')]
-          .find((node) => !/开始|Start/.test(node.textContent || ''))
-        tab?.click()
-      })
-    }
-
-    let terminalReady = false
-    for (let i = 0; i < 20 && !terminalReady; i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 500))
-      terminalReady = await page.evaluate(() => Boolean(document.querySelector('.xterm-screen, .xterm')))
-    }
-    first.terminalPanel = terminalReady
+    await sleep(1500)
+    await page.evaluate(() => {
+      const button = document.querySelector('button[aria-label="选择 Shell"], button[aria-label="Select shell"]')
+      button?.click()
+    })
+    await sleep(900)
+    await page.evaluate(() => {
+      const item = [...document.querySelectorAll('[role="menuitem"], [role="option"]')].find((node) => /bash/i.test(node.textContent || ''))
+      item?.click()
+    })
+    const terminalReady = await until(
+      '右侧栏终端出现 xterm',
+      () => page.evaluate(() => Boolean(document.querySelector('.xterm-screen, .xterm'))),
+      20000,
+    ).catch(() => false)
+    first.terminalPanel = Boolean(terminalReady)
     if (!terminalReady) {
-      problems.push('远端会话的右侧栏终端没有出现 xterm（V8 terminal/attach）')
+      problems.push('远端会话的右侧栏终端没有出现 xterm')
     } else {
       const center = await page.evaluate(() => {
         const node = document.querySelector('.xterm-screen, .xterm')
@@ -737,38 +394,18 @@ try {
         return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
       })
       await page.mouse.click(center.x, center.y)
-      await new Promise((resolve) => setTimeout(resolve, 300))
+      await sleep(300)
       await page.keyboard.type('echo PBCHK-$((6*7))')
       await page.keyboard.press('Enter')
-      await new Promise((resolve) => setTimeout(resolve, 2500))
-      const screen = await page.evaluate(
-        () => document.querySelector('.xterm-screen, .xterm')?.innerText ?? '',
-      )
+      await sleep(2500)
+      const screen = await page.evaluate(() => document.querySelector('.xterm-screen, .xterm')?.innerText ?? '')
       first.terminalScreen = screen.slice(-160)
-      await page.screenshot({ path: path.join(OUT, 'ui-11-remote-terminal.png') })
-      if (!screen.includes('PBCHK-42')) {
-        problems.push(`远端终端没有回显 PBCHK-42（V8 attach/write）：${screen.slice(-120)}`)
-      }
-      // 清理：关掉标签页，让远端回收进程
-      await page.evaluate(() => {
-        const tab = [...document.querySelectorAll('[data-dockkit-tab]')]
-          .find((node) => !/开始|Start/.test(node.textContent || ''))
-        tab?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
-      })
-      await new Promise((resolve) => setTimeout(resolve, 400))
-      const closedTab = await page.evaluate(() => {
-        const tab = [...document.querySelectorAll('[data-dockkit-tab]')]
-          .find((node) => !/开始|Start/.test(node.textContent || ''))
-        const button = tab?.querySelector('button')
-        if (!button) return false
-        button.click()
-        return true
-      })
-      first.terminalClosed = closedTab
-      await new Promise((resolve) => setTimeout(resolve, 800))
+      await page.screenshot({ path: path.join(OUT, 'ui-6-remote-terminal.png') })
+      if (!screen.includes('PBCHK-42')) problems.push(`远端终端没有回显 PBCHK-42：${screen.slice(-120)}`)
     }
   }
 
+  // ---- 收尾 ----
   const knownWarnings = consoleErrors.filter((text) => KNOWN_NOISE.some((pattern) => pattern.test(text)))
   const realErrors = consoleErrors.filter((text) => !knownWarnings.includes(text))
   const result = { base, mode: QUICK ? 'quick' : 'full', ...first, consoleErrors: realErrors, knownWarnings }
@@ -776,10 +413,6 @@ try {
   console.log(JSON.stringify(result, null, 2))
   if (realErrors.length) problems.push(`页面报错 ${realErrors.length} 条`)
 
-  if (warnings.length) {
-    console.log('\n提醒：')
-    for (const warning of warnings) console.log(' -', warning)
-  }
   if (problems.length) {
     console.error('\n断言失败：')
     for (const problem of problems) console.error(' -', problem)
@@ -788,7 +421,5 @@ try {
     console.log('\n全部断言通过')
   }
 } finally {
-  // CDP 模式下不能 close：会把外部那条浏览器关掉，下次连不上
-  if (usingCdp) await browser.disconnect()
-  else await browser.close()
+  await browser.close()
 }
