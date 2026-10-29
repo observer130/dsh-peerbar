@@ -2,6 +2,27 @@
 
 本项目在 0.5.0 之前没有正式发布（只能填仓库绝对路径安装），下面是按能力阶段整理的历史。
 
+## 1.1.0 — 计划预览全文 + 定时任务实时刷新（2026-10-29）
+
+接上联邦路线剩下的两条真实缺口。
+
+- **计划预览全文**：右侧栏「计划」页签不再停在「正在读取计划…」。
+  宿主半新增 `lib/follow.js`（`WS /api/follow`）单向转发 `session/follow`；
+  浏览器在 `invokeRemote` 的流分支把 `session/follow` 换成同形状句柄
+  （`createRemoteFollowStream`）；`session/page` 进 RPC 白名单并补线格式，
+  供页签按 follow 的 cursor 往前翻页。地址只接受官方 `parsePlanAddress` 的两种形状
+  （顶层会话 / 子代理），`buildFollowArgs` 有单测
+- **定时任务实时刷新**：`$events` 的 `emit` 帧转发到 `ctx.remote.events.deliver`，
+  白名单只放行 `schedule/changed`。远端改期/删除/投递后，本机「自动化任务」页与
+  侧栏任务标记自动重取 catalog，不用刷新页面
+- **文档**：`docs/架构.md` 补 §5.3/§5.4 与路由表；`docs/现状与计划.md` 重写能力矩阵、
+  P1、沙箱演练步骤；`docs/插件开发规范.md` 补 §13.7/§13.8（follow 是流、emit 要投到
+  同一实例、`schedule/create` 没有远程端点）；AGENTS/README 同步
+- **验证**：`node --test` 78 pass；`node scripts/ui-check.mjs` 全绿，新增第 7 段
+  （解档计划夹具 → 点卡片 → 右侧栏出现正文，截图 `ui-7-plan-preview.png`）；
+  `schedule/changed` 用独立沙箱实例演练（远端 agent 建任务 → 本机面板不刷新即出现；
+  远端删除 → 立即消失）
+
 ## 1.0.0 — 原生会话联邦（2026-10-29）
 
 路线纠正：**聚合多个前端，而不是重画一个前端**。不再遮蔽 `sidebar.workspaces`，

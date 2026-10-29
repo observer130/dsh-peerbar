@@ -427,6 +427,163 @@ try {
       first.terminalScreen = screen.slice(-160)
       await page.screenshot({ path: path.join(OUT, 'ui-6-remote-terminal.png') })
       if (!screen.includes('PBCHK-42')) problems.push(`远端终端没有回显 PBCHK-42：${screen.slice(-120)}`)
+
+      // 清理：关掉这次自检创建的终端。不关的话远端会攒到 per-session 上限
+      // （`Session terminal limit reached`），下一轮自检就打不开 xterm 了。
+      const closed = await page.evaluate(async (groupKey) => {
+        const recorded = (window.__DSH_PB_REQUESTS__ ?? []).filter(
+          (entry) => /terminal\/create/.test(entry.body ?? '') && entry.payload?.ok === true,
+        )
+        const last = recorded.at(-1)
+        const id = last?.payload?.value?.id
+        const created = /"agentId":"([^"]+)"/.exec(last?.body ?? '')?.[1]
+        if (!id || !created) return { ok: false, reason: '没有找到 terminal/create 的记录' }
+        const hostId = /^workspace:peerbar:([^:]+):ws:/.exec(groupKey ?? '')?.[1]
+        if (!hostId) return { ok: false, reason: '没有解析出 hostId' }
+        const response = await fetch(`/dsh-peerbar/api/hosts/${encodeURIComponent(hostId)}/rpc`, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'content-type': 'application/json', 'x-dsh-peerbar-action': '1' },
+          body: JSON.stringify({ endpoint: 'terminal/close', args: { agentId: created, id } }),
+        })
+        const payload = await response.json().catch(() => null)
+        return { ok: payload?.ok === true, id }
+      }, firstRemoteKey).catch((error) => ({ ok: false, reason: String(error) }))
+      first.terminalClosed = closed
+    }
+  }
+
+  // ---- 7) 计划预览：远端 session/follow 的 opening snapshot + session/page ----
+  // 用 nv50 上已归档的「计划桥测试」会话：先解档 → 点开 → 点计划卡片 → 右侧栏应出现全文。
+  // 只读远端历史，唯一的写入是解档/回档这条测试会话（与新建会话同级）。
+  if (!QUICK) {
+    const planTarget = await page.evaluate(async () => {
+      const state = await fetch('/dsh-peerbar/api/state', { credentials: 'same-origin' }).then((response) => response.json())
+      for (const host of state?.hosts ?? []) {
+        for (const workspace of host.workspaces ?? []) {
+          for (const session of workspace.sessions ?? []) {
+            if (!/计划桥测试/.test(session.title ?? '')) continue
+            return {
+              hostId: host.hostId,
+              hostName: host.name,
+              rawId: session.rawId,
+              title: session.title,
+              workspaceTitle: `${workspace.name ?? '未分组'} · ${host.name}`,
+            }
+          }
+        }
+      }
+      return null
+    })
+    first.planPreview = { target: planTarget }
+
+    const setArchived = (target, archived) =>
+      page.evaluate(
+        async ([hostId, sessionId, archive]) => {
+          const response = await fetch(`/dsh-peerbar/api/hosts/${encodeURIComponent(hostId)}/rpc`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json', 'x-dsh-peerbar-action': '1' },
+            body: JSON.stringify({
+              endpoint: archive ? 'workspace/archiveSession' : 'workspace/unarchiveSession',
+              args: { request: { sessionId, ...(archive ? { stopActivity: true } : {}) } },
+            }),
+          })
+          const payload = await response.json().catch(() => null)
+          return response.ok && payload?.ok !== false
+        },
+        [target.hostId, target.rawId, archived],
+      )
+
+    if (!planTarget) {
+      first.planPreview.skipped = '没有「计划桥测试」会话（找不到计划夹具）'
+    } else {
+      const unarchived = await setArchived(planTarget, false)
+      first.planPreview.unarchived = unarchived
+      if (!unarchived) problems.push('解档计划夹具会话失败（远端 workspace/unarchiveSession 被拒）')
+
+      // 展开目标组，等 /state 把归档集刷新过来（行才会出现）
+      const planRow = await until(
+        '计划夹具会话出现在侧栏',
+        async () => {
+          await page.evaluate((title) => {
+            const group = [...document.querySelectorAll('[data-row-key^="workspace:"]')].find((row) =>
+              (row.innerText ?? '').includes(title),
+            )
+            if (group && group.getAttribute('aria-expanded') !== 'true') group.click()
+          }, planTarget.workspaceTitle)
+          return page.evaluate(
+            (key) => {
+              const row = document.querySelector(`[data-row-key="${key}"]`)
+              if (!row) return null
+              row.click()
+              return row.innerText.replace(/\s+/g, ' ').trim()
+            },
+            `session:${planTarget.rawId}`,
+          )
+        },
+        25000,
+      ).catch(() => false)
+      first.planPreview.rowAppeared = planRow
+
+      if (!planRow) {
+        problems.push(`解档后「${planTarget.title}」没有出现在侧栏（25s）`)
+      } else {
+        // 计划卡片由官方 ui-plan 从 tool/call(exit_plan_mode) 派生
+        const card = await until(
+          '计划卡片出现',
+          () =>
+            page.evaluate(() => {
+              const node = document.querySelector('[data-plan-card]')
+              if (!node) return null
+              return { callId: node.getAttribute('data-plan-card'), title: (node.innerText ?? '').replace(/\s+/g, ' ').trim() }
+            }),
+          25000,
+        ).catch(() => false)
+        first.planPreview.card = card
+        if (!card) {
+          problems.push('远端会话里没有渲染出计划卡片（[data-plan-card] 未出现）')
+        } else {
+          await page.evaluate(() => document.querySelector('[data-plan-card]')?.click())
+          // 官方页签先显示「正在读取计划…」，读成功后换成计划正文。
+          // 注意 until 只认「真值」：读到正文或明确失败之前一律返回 null，
+          // 否则第一轮（还在 loading）就会被当成最终状态。
+          const loaded = await until(
+            '计划全文',
+            () =>
+              page.evaluate(() => {
+                const text = document.body.innerText ?? ''
+                const hasBody = text.includes('恰好一行说明文字')
+                const failed = text.includes('无法读取计划')
+                if (!hasBody && !failed) return null
+                return {
+                  loading: text.includes('正在读取计划'),
+                  failed,
+                  // 夹具计划正文里的一句，卡片标题里没有
+                  hasBody,
+                  tabs: [...document.querySelectorAll('[data-dockkit-tab]')].map((node) => (node.textContent ?? '').trim()),
+                }
+              }),
+            25000,
+          ).catch(() => false)
+          first.planPreview.loaded = loaded
+          await page.screenshot({ path: path.join(OUT, 'ui-7-plan-preview.png') })
+          if (!loaded) {
+            problems.push('点击计划卡片后计划预览没有加载出来（25s）')
+          } else {
+            if (loaded.failed) problems.push('计划预览显示「无法读取计划」')
+            if (!loaded.hasBody) problems.push('计划预览没有出现正文（可能仍停在「正在读取计划…」）')
+            if (loaded.hasBody && loaded.loading) {
+              // 正文已出，但页面上还留着 loading 文案 → 说明换了另一个页签，记录但不判失败
+              first.planPreview.loadingLeftover = true
+            }
+          }
+        }
+      }
+
+      // 回档，别把夹具会话留在列表里
+      first.planPreview.rearchived = await setArchived(planTarget, true)
+      if (!first.planPreview.rearchived) problems.push('回档计划夹具会话失败')
     }
   }
 
