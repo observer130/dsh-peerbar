@@ -76,13 +76,16 @@ try {
     }
     return found
   })
-  // 展开所有远端组（组名以「 · 主机名」结尾）
-  await page.evaluate(() => {
-    for (const row of document.querySelectorAll('[data-row-key^="workspace:"]')) {
-      if (row.getAttribute('aria-expanded') !== 'true') row.click()
-    }
-  })
-  await new Promise((resolve) => setTimeout(resolve, 1200))
+  // 展开所有工作区组。主机分组开着时是两层：先展开主机行，子工作区行才出现，
+  // 所以要跑几趟（每趟只点当前 DOM 里的折叠行）。
+  for (let pass = 0; pass < 3; pass += 1) {
+    await page.evaluate(() => {
+      for (const row of document.querySelectorAll('[data-row-key^="workspace:"]')) {
+        if (row.getAttribute('aria-expanded') !== 'true') row.click()
+      }
+    })
+    await new Promise((resolve) => setTimeout(resolve, 900))
+  }
 
   const statFile = (entry, file) =>
     page

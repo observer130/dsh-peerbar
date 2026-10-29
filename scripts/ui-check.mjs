@@ -131,6 +131,8 @@ try {
           text,
           host: host ?? null,
           expanded: row.getAttribute('aria-expanded'),
+          // 官方"按工作区树"靠这个 CSS 变量做缩进：主机行 0px，子工作区 12px
+          indent: getComputedStyle(row).getPropertyValue('--dsh-workspace-indent').trim(),
           selected: /selected|selectedRow/i.test(row.className) || row.getAttribute('aria-selected') === 'true',
         }
         if (isGroup) groups.push(entry)
@@ -146,26 +148,99 @@ try {
       }
     }, hostNames)
 
-  // ---- 1) 树的形态 ----
+  // ---- 1) 树的形态：主机分组（1.2.0 起默认开）----
+  // 官方树支持任意层级，主机层是投影出来的：远端路径带 `主机:` 前缀、每台主机一个
+  // 合成父工作区（本机用 `/`）。所以加载后应该只有「本机 / 各主机」三行。
   const tree = await readTree()
-  const remoteGroups = tree.groups.filter((group) => group.host)
-  const localGroups = tree.groups.filter((group) => !group.host)
+  const hostRowTexts = ['本机', ...hostNames]
+  const isHostRow = (row) => hostRowTexts.includes(row.text)
+  const hostRows = tree.groups.filter(isHostRow)
+  const workspaceRowsAtLoad = tree.groups.filter((row) => !isHostRow(row))
   const first = {
     hostNames,
-    localGroups: localGroups.map((group) => group.text),
-    remoteGroups: remoteGroups.map((group) => group.text),
+    hostRows: hostRows.map((row) => row.text),
+    workspaceRowsAtLoad: workspaceRowsAtLoad.map((row) => row.text),
     shadowRows: tree.shadowRows,
   }
   await page.screenshot({ path: path.join(OUT, 'ui-1-sidebar.png') })
 
   if (tree.shadowRows > 0) problems.push(`仍出现影子树行（.dshp-sessionRow × ${tree.shadowRows}），说明没有走官方侧栏`)
-  if (localGroups.length === 0) problems.push('侧栏没有本机工作区行')
-  if (remoteGroups.length === 0) problems.push('侧栏没有远端组（组名应以「 · 主机名」结尾）')
-  if (remoteGroups.length > 0 && localGroups.length > 0) {
-    const lastLocal = tree.groups.map((group) => group.host).lastIndexOf(null)
-    const firstRemote = tree.groups.findIndex((group) => group.host)
-    if (firstRemote < lastLocal) problems.push('远端组排在本机组前面了（要求本机在前、远端接后）')
+  if (hostRows.length !== hostNames.length + 1) {
+    problems.push(`主机行应为「本机 + ${hostNames.length} 台」，实际 ${hostRows.length} 行（${hostRows.map((row) => row.text).join('、')}）`)
   }
+  if (hostRows[0]?.text !== '本机') problems.push('主机行第一行不是「本机」')
+  if (workspaceRowsAtLoad.length > 0) {
+    problems.push(`分组默认收起时不该出现工作区行（出现 ${workspaceRowsAtLoad.length} 行：${workspaceRowsAtLoad.map((row) => row.text).slice(0, 4).join('、')}）`)
+  }
+  if (tree.sessions.length > 0) problems.push('分组收起时不该出现会话行')
+
+  // 展开所有主机行：工作区行要出现在各自主机下面（缩进 12px）
+  const expandHost = async (label) => {
+    const ok = await page.evaluate((text) => {
+      const row = [...document.querySelectorAll('[data-row-key^="workspace:"]')].find(
+        (node) => (node.innerText ?? '').replace(/\s+/g, ' ').trim() === text,
+      )
+      if (!row) return false
+      if (row.getAttribute('aria-expanded') === 'true') return true
+      row.click()
+      return true
+    }, label)
+    if (ok) await sleep(700)
+    return ok
+  }
+  for (const label of hostRowTexts) {
+    if (!(await expandHost(label))) problems.push(`侧栏没有主机行「${label}」`)
+  }
+  await sleep(900)
+
+  const expandedTree = await readTree()
+  const remoteGroups = expandedTree.groups.filter((group) => group.host)
+  const localGroups = expandedTree.groups.filter((group) => !group.host && !isHostRow(group))
+  first.localGroups = localGroups.map((group) => group.text)
+  first.remoteGroups = remoteGroups.map((group) => group.text)
+  first.childIndent = {
+    host: hostRows[0]?.indent ?? null,
+    local: localGroups[0]?.indent ?? null,
+    remote: remoteGroups[0]?.indent ?? null,
+  }
+  await page.screenshot({ path: path.join(OUT, 'ui-1b-hosts-expanded.png') })
+
+  if (localGroups.length === 0) problems.push('展开「本机」后没有本机工作区行')
+  if (remoteGroups.length === 0) problems.push('展开远端主机后没有远端工作区行（组名应以「 · 主机名」结尾）')
+  if (first.childIndent.remote !== '12px') problems.push(`子工作区行缩进应为 12px，实际 ${first.childIndent.remote}`)
+  if (first.childIndent.host !== '0px') problems.push(`主机行缩进应为 0px，实际 ${first.childIndent.host}`)
+
+  const hostsSeen = new Set(remoteGroups.map((group) => group.host))
+  if (hostNames.length > 1 && hostsSeen.size < hostNames.length) {
+    problems.push(`只有 ${hostsSeen.size}/${hostNames.length} 台 Host 出现在侧栏`)
+  }
+
+  // 主机行不是真工作区：悬停的「新建会话」必须被拦下（给提示、不建会话）
+  const hostCreate = await page.evaluate((label) => {
+    const row = [...document.querySelectorAll('[data-row-key^="workspace:"]')].find(
+      (node) => (node.innerText ?? '').replace(/\s+/g, ' ').trim() === label,
+    )
+    if (!row) return null
+    row.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+    const button = [...row.querySelectorAll('button')].find((node) => (node.getAttribute('aria-label') ?? '').includes('新建会话'))
+    const sessionsBefore = document.querySelectorAll('[data-row-key^="session:"]').length
+    button?.click()
+    return { found: Boolean(button), sessionsBefore }
+  }, hostNames[0])
+  await sleep(1500)
+  const hostCreateAfter = await page.evaluate(() => ({
+    sessions: document.querySelectorAll('[data-row-key^="session:"]').length,
+    notice: document.getElementById('dshp-notice')?.textContent ?? null,
+  }))
+  first.hostCreateBlocked = { ...hostCreate, ...hostCreateAfter }
+  if (!hostCreate?.found) problems.push('主机行上没有「新建会话」按钮（官方行结构变了？）')
+  if (hostCreate?.found && hostCreateAfter.sessions !== hostCreate.sessionsBefore) {
+    problems.push('点主机行的「新建会话」真的建了会话（应被拦下）')
+  }
+  if (hostCreate?.found && !/主机分组/.test(hostCreateAfter.notice ?? '')) {
+    problems.push(`点主机行建会话没有给出提示（notice=${hostCreateAfter.notice}）`)
+  }
+
   // 回归：按目录合成、又没有正式会话的空组不该出现（用户验收时撞到的「未分组 · nv50」）
   const emptySynthetic = await page.evaluate(async () => {
     try {
@@ -191,16 +266,11 @@ try {
     problems.push(`空的合成工作区出现在了侧栏：${emptySynthetic.join('、')}`)
   }
 
-  const hostsSeen = new Set(remoteGroups.map((group) => group.host))
-  if (hostNames.length > 1 && hostsSeen.size < hostNames.length) {
-    problems.push(`只有 ${hostsSeen.size}/${hostNames.length} 台 Host 出现在侧栏`)
-  }
-
-  // ---- 1b) 远端组默认收起（1.2.0）----
-  // 官方把每个工作区画成一个可折叠分组；插件只在新组第一次出现时写一次折叠
-  // 状态（`uiWorkspace.view.setGroupExpanded`），用户手动展开后重载要保留。
+  // ---- 1b) 远端工作区组默认收起（1.2.0）----
+  // 主机展开后，子工作区（会话组）应全部收起；插件只在新组第一次出现时写一次
+  // 折叠状态（`uiWorkspace.view.setGroupExpanded`），用户手动展开后重载要保留。
   const collapsed = await until(
-    '远端组默认收起',
+    '远端工作区组默认收起',
     () =>
       page.evaluate((names) => {
         const rows = [...document.querySelectorAll('[data-row-key^="workspace:"]')]
@@ -875,24 +945,26 @@ try {
     }
   }
 
-  // ---- 9) 一次性迁移：升级后第一次加载把已展开的远端组也收起来 ----
-  // 官方会把用户展开的分组记在 `dsh.workspace.view.v5`（重载保留）；清掉插件的
-  // 两个标记再重载，插件应把已有远端组收一次。放在最后跑，避免重载干扰前面的段落。
-  const migrationProbe = await page.evaluate(() => {
+  // ---- 9) 折叠迁移 + 分组开关（1.2.0）----
+  // 9a 一次性迁移：展开一个远端工作区组 → 官方记住 → 清插件标记重载 → 又被收起。
+  // 9b 视图选项切到「按工作区」→ 开关自动关、行回到平铺（真实路径、无主机行）。
+  // 9c 设置页把「按主机分组」打开 → 回到主机分组。
+  const probe = await page.evaluate((names) => {
     const row = [...document.querySelectorAll('[data-row-key^="workspace:"]')].find((node) =>
-      / · (nv50|m50)$/.test((node.innerText ?? '').trim()),
+      names.some((name) => (node.innerText ?? '').trim().endsWith(` · ${name}`)),
     )
     if (!row) return null
     const key = row.getAttribute('data-row-key') ?? ''
     row.click()
     return { key, workspaceId: key.replace(/^workspace:/, '') }
-  })
-  if (migrationProbe) {
+  }, hostNames)
+  first.migrationProbe = probe
+  if (probe) {
     await sleep(900)
     const persisted = await page.evaluate((workspaceId) => {
       const raw = localStorage.getItem('dsh.workspace.view.v5') ?? ''
       return { hasKey: raw.includes(workspaceId), rawLength: raw.length }
-    }, migrationProbe.workspaceId)
+    }, probe.workspaceId)
     first.autoCollapsePersisted = persisted
     if (!persisted.hasKey) problems.push('展开远端组后官方没有把折叠状态写进 localStorage（迁移无法验证）')
     await page.evaluate(() => {
@@ -901,11 +973,15 @@ try {
     })
     await page.reload({ waitUntil: 'networkidle2', timeout: 40000 })
     await until(
-      '重载后出现工作区行',
+      '重载后出现主机行',
       () => page.evaluate(() => document.querySelectorAll('[data-row-key^="workspace:"]').length > 0),
       30000,
     )
     await sleep(6000)
+    for (const name of ['本机', ...hostNames]) {
+      if (!(await expandHost(name))) problems.push(`重载后找不到主机行「${name}」`)
+    }
+    await sleep(1000)
     const reCollapsed = await until(
       '重载后远端组再次收起',
       () =>
@@ -925,7 +1001,92 @@ try {
     ).catch(() => false)
     first.autoCollapseAfterReload = reCollapsed
     if (!reCollapsed) problems.push('重载后迁移没有把已展开的远端组收起来')
+  } else {
+    problems.push('找不到任何远端工作区行（迁移无法验证）')
   }
+
+  // 9b 视图选项 → 按工作区：分组自动关
+  const menuOpened = await page.evaluate(() => {
+    const button = [...document.querySelectorAll('button[aria-label]')].find(
+      (node) => node.getAttribute('aria-label') === '视图选项',
+    )
+    if (!button) return false
+    button.click()
+    return true
+  })
+  if (!menuOpened) problems.push('找不到「视图选项」按钮')
+  await sleep(700)
+  const groupItem = await page.evaluate(() => {
+    const nodes = [...document.querySelectorAll('*')].filter(
+      (node) => (node.innerText ?? '').trim() === '按工作区' && node.children.length === 0 && node.offsetParent !== null,
+    )
+    const node = nodes[0]
+    if (!node) return null
+    const rect = node.getBoundingClientRect()
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+  })
+  if (!groupItem) problems.push('视图选项里找不到「按工作区」')
+  else await page.mouse.click(groupItem.x, groupItem.y)
+  await sleep(2200)
+  const flat = await page.evaluate(() => ({
+    flag: localStorage.getItem('dsh-peerbar.hostGroups'),
+    rows: [...document.querySelectorAll('[data-row-key^="workspace:"]')].map((row) => (row.innerText ?? '').replace(/\s+/g, ' ').trim()),
+  }))
+  const flatHostRows = flat.rows.filter((text) => ['本机', ...hostNames].includes(text))
+  first.groupingOff = { flag: flat.flag, rowCount: flat.rows.length, hostRows: flatHostRows }
+  if (flat.flag !== '0') problems.push(`切到「按工作区」后分组开关没有自动关（flag=${flat.flag}）`)
+  if (flatHostRows.length > 0) problems.push(`关掉分组后仍出现主机行：${flatHostRows.join('、')}`)
+  const expectedFlat = (first.localGroups?.length ?? 0) + (first.remoteGroups?.length ?? 0)
+  if (expectedFlat > 0 && flat.rows.length !== expectedFlat) {
+    problems.push(`平铺行数应为 ${expectedFlat}，实际 ${flat.rows.length}`)
+  }
+  await page.screenshot({ path: path.join(OUT, 'ui-9-grouping-off.png') })
+
+  // 9c 设置页 → 远程工作区 → 打开「按主机分组」
+  await page.evaluate(() => {
+    ;[...document.querySelectorAll('button[aria-label]')]
+      .find((node) => node.getAttribute('aria-label') === '账号菜单')
+      ?.click()
+  })
+  await sleep(700)
+  await page.evaluate(() => {
+    ;[...document.querySelectorAll('[role="menuitem"], button')]
+      .find((node) => (node.innerText ?? '').trim() === '设置' && node.offsetParent !== null)
+      ?.click()
+  })
+  await sleep(1200)
+  await page.evaluate(() => {
+    ;[...document.querySelectorAll('button, [role="menuitem"], div')]
+      .find((node) => (node.innerText ?? '').trim() === '远程工作区' && node.offsetParent !== null)
+      ?.click()
+  })
+  await sleep(900)
+  const toggled = await page.evaluate(() => {
+    const label = [...document.querySelectorAll('label')].find((node) => (node.innerText ?? '').includes('按主机分组'))
+    const box = label?.querySelector('input[type="checkbox"]')
+    if (!box) return false
+    if (!box.checked) box.click()
+    return true
+  })
+  if (!toggled) problems.push('设置页找不到「按主机分组」开关')
+  await sleep(2200)
+  await page.screenshot({ path: path.join(OUT, 'ui-10-grouping-on.png') })
+  const regrouped = await page.evaluate((names) => {
+    const rows = [...document.querySelectorAll('[data-row-key^="workspace:"]')].map((row) =>
+      (row.innerText ?? '').replace(/\s+/g, ' ').trim(),
+    )
+    return {
+      flag: localStorage.getItem('dsh-peerbar.hostGroups'),
+      hostRows: rows.filter((text) => ['本机', ...names].includes(text)),
+    }
+  }, hostNames)
+  first.groupingOn = regrouped
+  if (regrouped.flag !== '1') problems.push(`设置页打开分组后开关没生效（flag=${regrouped.flag}）`)
+  if (regrouped.hostRows.length !== hostNames.length + 1) {
+    problems.push(`设置页打开分组后主机行应为 ${hostNames.length + 1} 行，实际 ${regrouped.hostRows.length}`)
+  }
+  await page.keyboard.press('Escape')
+  await sleep(600)
 
   // ---- 收尾 ----
   const knownWarnings = consoleErrors.filter((text) => KNOWN_NOISE.some((pattern) => pattern.test(text)))

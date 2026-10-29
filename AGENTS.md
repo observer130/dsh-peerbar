@@ -7,7 +7,7 @@
 - **是什么**：一个 DeepSeek Harness（dsh）插件，**聚合多个 dsh 前端**：在官方侧栏那一列里列出本机 + 多台远端（nv50 / m50）的工作区与会话，点远端会话由官方中栏渲染、执行留在远端。需求以 `docs/意图.md` 为准（冻结），实现见 `docs/架构.md`。
 - **技术栈**：纯 JavaScript ESM，**无构建步骤**，目标零第三方依赖。宿主半跑在 Node，客户端半是浏览器 `__ModuleLoader__` bundle。
 - **目标宿主**：dsh `0.2.1-rc.2` / `rc.3`（两者都实测通过），profile `~/.dsh/profiles/desktop`。
-- **当前阶段**：`master` = 1.1.0，功能分支 `feat/remote-workspace-ux` = 1.2.0（等验收）。路线仍是**原生会话联邦**：不注册 `sidebar.workspaces`，把远端工作区/会话投影进官方 store，官方三栏原样渲染；`session/control`、`$events`、`session/follow` 三条桥已接上。1.2.0 追加两件事：远端工作区组默认收起（`uiWorkspace.view.setGroupExpanded` + 本地账本 + 一次性迁移）、接管官方 `sidebar.workspaces.directoryFlow` / `conversation.hero.workspace.directoryFlow` 让「添加工作区」能选主机并在远端注册。**主机级分组行**（本机/nv50/m50）没有官方座位，只能上游加座（`docs/上游提案-侧栏分组座位.md`）或自绘树，别再拿默认收起冒充它。剩余 P1 与边界见 `docs/现状与计划.md` §3。
+- **当前阶段**：`master` = 1.1.0；功能分支 `feat/remote-workspace-ux` = 1.2.0（等验收）。路线仍是**原生会话联邦**：不注册 `sidebar.workspaces`，把远端数据投影进官方 store，官方三栏原样渲染；`session/control`、`$events`、`session/follow` 三条桥已接上。1.2.0 三件事：①侧栏**主机分组**（本机/nv50/m50 可折叠）——用官方「按工作区树」+ 投影出来的合成父工作区（远端 `path: "nv50:/..."`、本机 `/`），不注册座位；用户切走分组方式时开关自动关、退回平铺；**别再为这个功能去自绘树**。②远端工作区组默认收起（`setGroupExpanded` + 本地账本 + 一次性迁移）。③接管官方 `sidebar.workspaces.directoryFlow` / `conversation.hero.workspace.directoryFlow`，「添加工作区」可先选主机、在远端 `workspace/create`。剩余 P1 与边界见 `docs/现状与计划.md` §3。
 - **两半结构**：`lib/index.js` 宿主半（注册路由、探活、拉取远端快照、缓存）；`lib/client.js` 客户端半（投影进官方 store、合成 SessionBinding、`settings.section`）。两半之间只通过同源 HTTP/WS 通信。
 
 ## 架构不变量
