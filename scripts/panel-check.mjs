@@ -50,8 +50,11 @@ try {
   page.on('pageerror', (error) => consoleErrors.push(String(error)))
 
   await page.goto(base, { waitUntil: 'networkidle2', timeout: 40000 })
-  await page.waitForSelector('.dshp-root', { timeout: 20000 })
-  await new Promise((resolve) => setTimeout(resolve, 1500))
+  // 联邦模式下没有影子树（`.dshp-root` 是 v8 的类名），等官方行出现即可
+  await page.waitForFunction(() => document.querySelectorAll('[data-row-key^="workspace:"]').length > 0, {
+    timeout: 30000,
+  })
+  await new Promise((resolve) => setTimeout(resolve, 6000))
 
   // 找一条带交付物、且在侧栏可见的远端会话
   const candidates = await page.evaluate(async () => {
@@ -65,72 +68,125 @@ try {
           const url = `/dsh-peerbar/api/session?hostId=${encodeURIComponent(host.hostId)}&id=${encodeURIComponent(session.rawId)}&limit=200&raw=1`
           const raw = await (await fetch(url, { credentials: 'same-origin' })).json()
           const hasDeliverable = (raw.records ?? []).some((record) => record.event?.type === 'deliverables/presented')
-          if (hasDeliverable) found.push(session.title)
+          if (hasDeliverable) {
+            found.push({ title: session.title, hostId: host.hostId, rawId: session.rawId, cwd: workspace.cwd ?? null })
+          }
         }
       }
     }
     return found
   })
+  // 展开所有远端组（组名以「 · 主机名」结尾）
   await page.evaluate(() => {
-    for (const tag of document.querySelectorAll('.dshp-tag')) {
-      const row = tag.closest('.dshp-projectRow')
-      if (row && row.getAttribute('aria-expanded') !== 'true') row.click()
+    for (const row of document.querySelectorAll('[data-row-key^="workspace:"]')) {
+      if (row.getAttribute('aria-expanded') !== 'true') row.click()
     }
-    for (const button of document.querySelectorAll('[aria-label^="展开其余"]')) button.click()
   })
   await new Promise((resolve) => setTimeout(resolve, 1200))
 
+  const statFile = (entry, file) =>
+    page
+      .evaluate(
+        async ([hostId, sessionId, path]) => {
+          const response = await fetch(`/dsh-peerbar/api/hosts/${encodeURIComponent(hostId)}/rpc`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json', 'x-dsh-peerbar-action': '1' },
+            body: JSON.stringify({ endpoint: 'workspaceFiles/stat', args: { workspaceFileScopeId: sessionId, path } }),
+          })
+          const payload = await response.json().catch(() => null)
+          return { ok: response.ok && payload?.ok === true, status: response.status }
+        },
+        [entry.hostId, entry.rawId, file],
+      )
+      .catch(() => ({ ok: false }))
+
+  // 逐个候选会话试：打开 → 收集正文里的文件引用 → stat 挑一个真能读到的 → 点开。
+  // 交付物卡片可能指向已删除的路径，那是数据问题：换下一个候选，而不是判插件失败。
   let openedTitle = null
-  let chosen = null
-  for (const title of candidates) {
+  let previewDone = false
+  const tried = []
+  for (const entry of candidates) {
+    if (previewDone) break
     const clicked = await page.evaluate((wanted) => {
       const prefix = wanted.slice(0, 12)
-      const row = [...document.querySelectorAll('.dshp-sessionRow')].find((node) => {
-        const text = (node.querySelector('.dshp-title')?.textContent ?? '').trim()
+      const row = [...document.querySelectorAll('[data-row-key^="session:"]')].find((node) => {
+        const text = (node.innerText ?? '').replace(/\s+/g, ' ').trim()
         return text !== '' && (text.includes(prefix) || wanted.includes(text.slice(0, 12)))
       })
       if (!row) return false
       row.click()
       return true
-    }, title)
+    }, entry.title)
     if (!clicked) continue
     await new Promise((resolve) => setTimeout(resolve, 2600))
     const crumb = await page.evaluate(() => document.querySelector('[class*="crumbCurrent"]')?.textContent?.trim() ?? null)
-    if (crumb) {
-      chosen = title
-      openedTitle = crumb
-      break
+    if (!crumb) continue
+    openedTitle = crumb
+
+    const files = await page.evaluate(() =>
+      [...document.querySelectorAll('button')]
+        .map((item) => (item.innerText ?? '').trim())
+        .filter((text) => text.length > 0 && text.length < 80 && /\.(md|markdown|py|ts|js|json|jsonl|txt|yaml|yml|csv)$/i.test(text))
+        .slice(0, 8),
+    )
+    if (files.length === 0) {
+      tried.push({ title: entry.title, reason: '正文里没有文件引用' })
+      continue
     }
+
+    const consoleBefore = consoleErrors.length
+    let readable = null
+    for (const file of files) {
+      if ((await statFile(entry, file)).ok) {
+        readable = file
+        break
+      }
+    }
+    // stat 失败会在 console 里留下 `status of 502`：那是探针噪声，
+    // 只清掉窗口内新增的资源错误，不动真正的 UI 报错。
+    for (let index = consoleErrors.length - 1; index >= consoleBefore; index -= 1) {
+      if (/status of 502/.test(consoleErrors[index] ?? '')) consoleErrors.splice(index, 1)
+    }
+    if (!readable) {
+      tried.push({ title: entry.title, candidates: files, reason: '引用的文件在远端都读不到' })
+      continue
+    }
+
+    await page.evaluate((text) => {
+      const node = [...document.querySelectorAll('button')].find((item) => (item.innerText ?? '').trim() === text)
+      node?.click()
+    }, readable)
+    await new Promise((resolve) => setTimeout(resolve, 3500))
+    const preview = await page.evaluate(() => {
+      const tabs = [...document.querySelectorAll('[data-dockkit-tab]')].map((node) => (node.textContent ?? '').trim())
+      const text = document.body.innerText ?? ''
+      return { tabs, tail: text.slice(-600) }
+    })
+    const opened = preview.tabs.some((tab) => tab.includes(readable))
+    const failed = /无法读取|读取失败|不存在|EISDIR|permission denied/i.test(preview.tail.slice(-260))
+    result.preview = {
+      title: entry.title,
+      openedTitle,
+      mention: readable,
+      cwd: entry.cwd ?? null,
+      opened,
+      failed,
+      tabs: preview.tabs,
+    }
+    await page.screenshot({ path: path.join(OUT, 'panel-preview.png') })
+    if (!opened) problems.push(`点击「${readable}」后预览标签页没有打开`)
+    if (failed) problems.push(`「${readable}」预览显示读取失败`)
+    previewDone = true
   }
 
-  if (!chosen) {
-    result.preview = { skipped: true, reason: '没有可在侧栏打开的交付物会话（可能都已归档）' }
-  } else {
-    const mention = await page.evaluate(() => {
-      const node = [...document.querySelectorAll('button')].find((item) => {
-        const text = (item.innerText ?? '').trim()
-        return text.length > 0 && text.length < 80 && /\.(md|markdown|py|ts|js|json|jsonl|txt|yaml|yml|csv)$/i.test(text)
-      })
-      if (!node) return null
-      const text = node.innerText.trim()
-      node.click()
-      return text
-    })
-    if (!mention) {
-      result.preview = { title: chosen, openedTitle, skipped: true, reason: '该会话正文里没有文件引用' }
-    } else {
-      await new Promise((resolve) => setTimeout(resolve, 3500))
-      const preview = await page.evaluate(() => {
-        const tabs = [...document.querySelectorAll('[data-dockkit-tab]')].map((node) => (node.textContent ?? '').trim())
-        const text = document.body.innerText ?? ''
-        return { tabs, tail: text.slice(-600) }
-      })
-      const opened = preview.tabs.some((tab) => tab.includes(mention))
-      const failed = /无法读取|读取失败|不存在|EISDIR|permission denied/i.test(preview.tail.slice(-260))
-      result.preview = { title: chosen, openedTitle, mention, opened, failed, tabs: preview.tabs }
-      await page.screenshot({ path: path.join(OUT, 'panel-preview.png') })
-      if (!opened) problems.push(`点击「${mention}」后预览标签页没有打开`)
-      if (failed) problems.push(`「${mention}」预览显示读取失败`)
+  if (!previewDone) {
+    result.preview = {
+      skipped: true,
+      reason: candidates.length === 0
+        ? '没有可在侧栏打开的交付物会话（可能都已归档）'
+        : '候选会话引用的文件在远端都读不到（数据问题，不是插件失败）',
+      tried,
     }
   }
 

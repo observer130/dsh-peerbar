@@ -88,8 +88,13 @@ test('session 路由处理器可执行，不抛引用错误', async () => {
 
   const sessionRoute = routes.find((r) => r.path === '/dsh-peerbar/api/session')
   assert.ok(sessionRoute, '没有注册 /session 路由')
-  // 三条 WS 代理都要在：终端、$events、session/control
-  for (const path of ['/dsh-peerbar/api/terminal', '/dsh-peerbar/api/events', '/dsh-peerbar/api/control']) {
+  // 四条 WS 代理都要在：终端、$events、session/control、session/follow
+  for (const path of [
+    '/dsh-peerbar/api/terminal',
+    '/dsh-peerbar/api/events',
+    '/dsh-peerbar/api/control',
+    '/dsh-peerbar/api/follow',
+  ]) {
     assert.ok(upgrades.some((route) => route.path === path), `没有注册 ${path} upgrade`)
   }
 

@@ -28,6 +28,7 @@ test('白名单放行已知端点', () => {
     'fileReferences/list', // 「@」补全
     'sessionReferenceResolver/candidates',
     'skills/list',
+    'session/page', // 只读：计划页签按 follow 的 cursor 往前翻页
   ]) {
     assert.equal(isAllowedRpc(endpoint), true, endpoint + ' 应放行')
   }
@@ -39,7 +40,6 @@ test('白名单拒绝流式与未知端点', () => {
     'session/follow',
     'session/control',
     '$events',
-    'session/page', // 读走 /session 路由，不开双通道
     'workspace/initializeDefault',
     'directoryPicker/pick',
     'directoryPicker/createDirectory',

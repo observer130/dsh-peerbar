@@ -1,6 +1,6 @@
 {
   "name": "dsh-peerbar",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "把多台 dsh 聚合成一个前端：本机与各远端的工作区/会话混排在官方侧栏，点远端会话由官方中栏渲染、执行留在远端",
   "type": "module",
   "main": "lib/index.js",

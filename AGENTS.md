@@ -7,7 +7,7 @@
 - **是什么**：一个 DeepSeek Harness（dsh）插件，**聚合多个 dsh 前端**：在官方侧栏那一列里列出本机 + 多台远端（nv50 / m50）的工作区与会话，点远端会话由官方中栏渲染、执行留在远端。需求以 `docs/意图.md` 为准（冻结），实现见 `docs/架构.md`。
 - **技术栈**：纯 JavaScript ESM，**无构建步骤**，目标零第三方依赖。宿主半跑在 Node，客户端半是浏览器 `__ModuleLoader__` bundle。
 - **目标宿主**：dsh `0.2.1-rc.2` / `rc.3`（两者都实测通过），profile `~/.dsh/profiles/desktop`。
-- **当前阶段**：`master` = v8（0.8.0，影子侧栏 + 远端终端）。`feat/native-federation` 换成**原生会话联邦**路线：不再注册 `sidebar.workspaces`，把远端工作区/会话投影进官方 store，官方侧栏/中栏原样渲染（已跑通：多主机树、打开远端会话、发消息、远端新建会话）。剩余：`session/control` 控制流（计划审批/提问）、联邦版 `ui-check`、离线态。现状与计划见 `docs/现状与计划.md`。
+- **当前阶段**：`master` = 1.0.0 **原生会话联邦**。不注册 `sidebar.workspaces`，把远端工作区/会话投影进官方 store，官方侧栏/中栏/右侧栏原样渲染；控制流（`session/control`）、转发事件（`$events`）、会话历史流（`session/follow`）三条桥都已接上。剩余 P1 与边界见 `docs/现状与计划.md` §3，别再把它当功能缺口重复做。
 - **两半结构**：`lib/index.js` 宿主半（注册路由、探活、拉取远端快照、缓存）；`lib/client.js` 客户端半（投影进官方 store、合成 SessionBinding、`settings.section`）。两半之间只通过同源 HTTP/WS 通信。
 
 ## 架构不变量
@@ -75,7 +75,9 @@ lib/identity.js  origin 归一化、hostId、虚拟 ID、cwd → 工作区
 lib/remote.js    令牌换 cookie、RPC 信封、session/list、分页、错误分类
 lib/rpc.js       远端 RPC 白名单（/hosts/<id>/rpc 只放行这张表）
 lib/stream.js    Remote 流通道：workspace/follow 归档集、workspaceFiles/changes（SSE）、
-                 双工 terminal/attach（send/close）、session/control 控制流
+                 双工 terminal/attach（send/close）、session/control 控制流、session/follow 历史流
+lib/control.js   session/control 单向 WS 桥（计划/提问投影）
+lib/follow.js    session/follow 单向 WS 桥（计划预览的 opening snapshot）
 lib/terminal.js  远端终端 WS 代理：浏览器 ↔ 本机 ↔ 远端 mux，端点白名单 + 帧转发
 lib/probe.js     探活状态机与退避
 lib/peers.js     每 Host 的快照编排、调度与缓存
@@ -156,7 +158,7 @@ scripts/dev-server.sh > .workbuddy/tmp/pb-web.log 2>&1 &
 
 # 2) 自动验收：登录 → 截图侧栏 → 展开远端组 → 点开会话 → 再截图 → 断言
 node scripts/ui-check.mjs --quick   # 日常：不建会话、不发消息、不调真模型（约 40s）
-node scripts/ui-check.mjs           # 发布前全量：含远端新建会话 + 真模型回复（≤180s）
+node scripts/ui-check.mjs           # 发布前全量：远端新建会话 + 真模型回复 + 计划预览（≤180s）
 node scripts/panel-check.mjs        # 派生面板：远端文档预览 + 定时任务目录（缺数据记 skipped）
 ```
 
