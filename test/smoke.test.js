@@ -65,6 +65,7 @@ test('宿主半模块可被真实导入，导出齐全', async () => {
 test('session 路由处理器可执行，不抛引用错误', async () => {
   const { apply } = await import('../lib/index.js')
   const routes = []
+  const upgrades = []
   const ctx = {
     logger: { info() {}, warn() {} },
     effect(fn) {
@@ -77,6 +78,7 @@ test('session 路由处理器可执行，不抛引用错误', async () => {
         return () => {}
       },
       registerUpgrade(route) {
+        upgrades.push(route)
         return () => {}
       },
     },
@@ -86,6 +88,10 @@ test('session 路由处理器可执行，不抛引用错误', async () => {
 
   const sessionRoute = routes.find((r) => r.path === '/dsh-peerbar/api/session')
   assert.ok(sessionRoute, '没有注册 /session 路由')
+  // 三条 WS 代理都要在：终端、$events、session/control
+  for (const path of ['/dsh-peerbar/api/terminal', '/dsh-peerbar/api/events', '/dsh-peerbar/api/control']) {
+    assert.ok(upgrades.some((route) => route.path === path), `没有注册 ${path} upgrade`)
+  }
 
   const call = (url) =>
     new Promise((resolve, reject) => {
@@ -141,6 +147,7 @@ test('rpc 路由处理器可执行，白名单生效', async () => {
         return () => {}
       },
       registerUpgrade(route) {
+        
         return () => {}
       },
     },
@@ -218,6 +225,7 @@ test('health 版本与 package.json 一致', async () => {
         return () => {}
       },
       registerUpgrade(route) {
+        
         return () => {}
       },
     },
