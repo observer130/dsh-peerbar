@@ -198,6 +198,8 @@ test('白名单里的每个端点都要有明确归属（回写 or 已知无需�
     'session/updateQueue',
     'session/selectModel',
     'session/modelCatalog',
+    // 会话投影：只读，供子代理目录 / plan 状态使用
+    'session/projections',
     'session/attachment',
     'directoryPicker/list',
     // 上传只产生 receiptId，侧栏没有可见状态变化
