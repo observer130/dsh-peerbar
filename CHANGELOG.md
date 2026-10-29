@@ -2,6 +2,43 @@
 
 本项目在 0.5.0 之前没有正式发布（只能填仓库绝对路径安装），下面是按能力阶段整理的历史。
 
+## 1.0.0 — 原生会话联邦（2026-10-29）
+
+路线纠正：**聚合多个前端，而不是重画一个前端**。不再遮蔽 `sidebar.workspaces`，
+远端数据投影进官方 store，侧栏、中栏、右侧栏全部由官方组件渲染。
+
+- **侧栏**：`ClientWorkspaceModel.buildSnapshot` 追加远端组（本机在前、按登记顺序）；
+  `sessions.list.getSnapshot` 合并远端行（含未打开会话、子代理、归档/置顶集合）。
+  官方菜单、拖拽、运行点、未读、搜索原样可用；按 cwd 合成且没有正式会话的空组不投影
+- **中栏**：`retain` 对联邦 id 就地造 binding（空窗口占位 + 异步 hydrate），
+  官方 `openSession` 的同步语义不被破坏；正文、工具调用、交付物、模型选择全部官方
+- **交互面**：`$events` waterfall 经官方 `dispatchWaterfall` 派发（计划审阅、用户提问、
+  工具审批的卡片与徽标都是官方的）；结果用收到请求那条 Connection 的 answer cookie
+  回 `$events/result`。`session/control` 单向桥补投影（`userQuestions`/`inbox`/
+  `subagentCatalog`）
+- **写操作**：新建会话、改名、归档/取消归档、置顶/取消置顶、分叉全部改投所属 Host；
+  跨主机拖拽与合成工作区改名/删除明确拒绝并说明原因
+- **离线**：组与缓存标题保留，打开会话提示「{host} 连不上」，不刷 401；恢复自动回来
+- **验证**：`ui-check` 改为联邦断言（官方行 key、正文 hydrate、远端新建 + prompt 实投、
+  终端回显、空合成组回归）；真实 nv50 上跑通两轮计划审批（卡片 → 同意 → 远端继续）；
+  单测 74 pass
+
+## 0.9.0 — 远端文本预览与定时任务（2026-10-28）
+
+- **文档预览**：远端会话里的文件链接不再被拦成提示，直接打开右侧栏预览；
+  Markdown/代码/文本走 `workspaceFiles/read`，图片/PDF 走 `readBytes`
+  （宿主半解析 multipart → base64 → 浏览器还原 Uint8Array）。Office 转换
+  显式提示暂不支持，不静默读本机同名文件
+- **定时任务**：宿主半新增 `GET /dsh-peerbar/api/schedule`，把各在线 Host 的
+  `schedule/catalog` 合成一份并标注归属；客户端 `schedule/catalog` 走合成结果，
+  `list/history/update/delete` 在会话未打开时按 sessionId 定位 Host
+- **验证**：nv50 上让远端模型创建提醒「喝水」→「自动化任务」页列出任务，
+  会话页头「1 个提醒」打开的详情显示规则（时间/时区/单次），不再显示「已删除」；
+  远端 Markdown 实测渲染完整内容；远端 1×1 PNG 在预览面板渲染为 blob 图片
+- **调研**：新增 `docs/远端派生面板.md`，记录五个面板的数据来源与剩余工作
+  （交付物已可用；计划缺 `session/follow`/`session/page`；子代理依赖本地投影；
+  二进制预览缺 multipart 通道）
+
 ## 0.8.0 — 远端终端（2026-10-28）
 
 - **官方右侧栏终端直连远端 PTY**：浏览器 ↔ 本机插件 ↔ 远端 `/api/remote.mux`

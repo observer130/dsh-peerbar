@@ -1,0 +1,176 @@
+#!/usr/bin/env node
+/**
+ * 派生面板自检：远端文档预览 + 定时任务目录。
+ *
+ *   node scripts/panel-check.mjs            # 用 .workbuddy/tmp/pb-web.log 里的实例
+ *   node scripts/panel-check.mjs --base <url>
+ *
+ * 与 ui-check 分开：这两项依赖远端数据（有交付物的会话、真实任务），
+ * 不是每个环境都齐；缺数据时记为 skipped，不算失败。
+ *
+ * 产物：.workbuddy/tmp/panel-check.json、panel-preview.png
+ * 退出码：0 通过（含 skipped）；1 有断言失败或页面报错。
+ */
+import fs from 'node:fs'
+import path from 'node:path'
+import { createRequire } from 'node:module'
+
+const require = createRequire('/home/nwj/.workbuddy/binaries/node/workspace/')
+const puppeteer = require('puppeteer-core')
+
+const ROOT = path.resolve(import.meta.dirname, '..')
+const OUT = path.join(ROOT, '.workbuddy/tmp')
+fs.mkdirSync(OUT, { recursive: true })
+
+function readBase() {
+  const index = process.argv.indexOf('--base')
+  if (index !== -1 && process.argv[index + 1]) return process.argv[index + 1]
+  const log = path.join(OUT, 'pb-web.log')
+  const match = fs.readFileSync(log, 'utf8').match(/http:\/\/[\d.]+:\d+\/\?token=\S+/)
+  if (!match) throw new Error('日志里没有带 token 的 URL')
+  return match[0]
+}
+
+const base = readBase()
+const problems = []
+const result = { preview: null, schedule: null }
+const browser = await puppeteer.launch({
+  executablePath: '/usr/bin/google-chrome-stable',
+  headless: 'new',
+  args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
+})
+
+try {
+  const page = await browser.newPage()
+  await page.setViewport({ width: 1440, height: 900 })
+  const consoleErrors = []
+  page.on('console', (message) => {
+    if (message.type() === 'error' && !/Immer|status of 404/.test(message.text())) consoleErrors.push(message.text())
+  })
+  page.on('pageerror', (error) => consoleErrors.push(String(error)))
+
+  await page.goto(base, { waitUntil: 'networkidle2', timeout: 40000 })
+  await page.waitForSelector('.dshp-root', { timeout: 20000 })
+  await new Promise((resolve) => setTimeout(resolve, 1500))
+
+  // 找一条带交付物、且在侧栏可见的远端会话
+  const candidates = await page.evaluate(async () => {
+    const state = await (await fetch('/dsh-peerbar/api/state', { credentials: 'same-origin' })).json()
+    const hosts = (state.hosts ?? []).filter((host) => host.status === 'online')
+    const found = []
+    for (const host of hosts) {
+      for (const workspace of host.workspaces ?? []) {
+        for (const session of (workspace.sessions ?? []).slice(0, 8)) {
+          if (session.archived === true || !session.title) continue
+          const url = `/dsh-peerbar/api/session?hostId=${encodeURIComponent(host.hostId)}&id=${encodeURIComponent(session.rawId)}&limit=200&raw=1`
+          const raw = await (await fetch(url, { credentials: 'same-origin' })).json()
+          const hasDeliverable = (raw.records ?? []).some((record) => record.event?.type === 'deliverables/presented')
+          if (hasDeliverable) found.push(session.title)
+        }
+      }
+    }
+    return found
+  })
+  await page.evaluate(() => {
+    for (const tag of document.querySelectorAll('.dshp-tag')) {
+      const row = tag.closest('.dshp-projectRow')
+      if (row && row.getAttribute('aria-expanded') !== 'true') row.click()
+    }
+    for (const button of document.querySelectorAll('[aria-label^="展开其余"]')) button.click()
+  })
+  await new Promise((resolve) => setTimeout(resolve, 1200))
+
+  let openedTitle = null
+  let chosen = null
+  for (const title of candidates) {
+    const clicked = await page.evaluate((wanted) => {
+      const prefix = wanted.slice(0, 12)
+      const row = [...document.querySelectorAll('.dshp-sessionRow')].find((node) => {
+        const text = (node.querySelector('.dshp-title')?.textContent ?? '').trim()
+        return text !== '' && (text.includes(prefix) || wanted.includes(text.slice(0, 12)))
+      })
+      if (!row) return false
+      row.click()
+      return true
+    }, title)
+    if (!clicked) continue
+    await new Promise((resolve) => setTimeout(resolve, 2600))
+    const crumb = await page.evaluate(() => document.querySelector('[class*="crumbCurrent"]')?.textContent?.trim() ?? null)
+    if (crumb) {
+      chosen = title
+      openedTitle = crumb
+      break
+    }
+  }
+
+  if (!chosen) {
+    result.preview = { skipped: true, reason: '没有可在侧栏打开的交付物会话（可能都已归档）' }
+  } else {
+    const mention = await page.evaluate(() => {
+      const node = [...document.querySelectorAll('button')].find((item) => {
+        const text = (item.innerText ?? '').trim()
+        return text.length > 0 && text.length < 80 && /\.(md|markdown|py|ts|js|json|jsonl|txt|yaml|yml|csv)$/i.test(text)
+      })
+      if (!node) return null
+      const text = node.innerText.trim()
+      node.click()
+      return text
+    })
+    if (!mention) {
+      result.preview = { title: chosen, openedTitle, skipped: true, reason: '该会话正文里没有文件引用' }
+    } else {
+      await new Promise((resolve) => setTimeout(resolve, 3500))
+      const preview = await page.evaluate(() => {
+        const tabs = [...document.querySelectorAll('[data-dockkit-tab]')].map((node) => (node.textContent ?? '').trim())
+        const text = document.body.innerText ?? ''
+        return { tabs, tail: text.slice(-600) }
+      })
+      const opened = preview.tabs.some((tab) => tab.includes(mention))
+      const failed = /无法读取|读取失败|不存在|EISDIR|permission denied/i.test(preview.tail.slice(-260))
+      result.preview = { title: chosen, openedTitle, mention, opened, failed, tabs: preview.tabs }
+      await page.screenshot({ path: path.join(OUT, 'panel-preview.png') })
+      if (!opened) problems.push(`点击「${mention}」后预览标签页没有打开`)
+      if (failed) problems.push(`「${mention}」预览显示读取失败`)
+    }
+  }
+
+  // 定时任务：有任务就打开「自动化任务」页核对标题
+  const tasks = await page.evaluate(async () => {
+    const response = await fetch('/dsh-peerbar/api/schedule', { credentials: 'same-origin' })
+    if (!response.ok) return { ok: false, status: response.status }
+    const value = await response.json()
+    return { ok: true, tasks: (Array.isArray(value) ? value : []).map((item) => item.title).filter(Boolean) }
+  })
+  if (!tasks.ok) {
+    result.schedule = { skipped: true, reason: `catalog 路由 HTTP ${tasks.status}` }
+  } else if (tasks.tasks.length === 0) {
+    result.schedule = { skipped: true, reason: '当前没有远端定时任务' }
+  } else {
+    await page.evaluate(() => {
+      [...document.querySelectorAll('button[aria-label]')]
+        .find((button) => button.getAttribute('aria-label') === '自动化任务')?.click()
+    })
+    await new Promise((resolve) => setTimeout(resolve, 2500))
+    const listed = await page.evaluate((titles) => {
+      const text = document.body.innerText ?? ''
+      return titles.filter((title) => text.includes(title))
+    }, tasks.tasks.slice(0, 3))
+    result.schedule = { total: tasks.tasks.length, listed }
+    if (listed.length === 0) problems.push('「自动化任务」页没有列出远端任务')
+  }
+
+  result.consoleErrors = consoleErrors
+  if (consoleErrors.length) problems.push(`页面报错 ${consoleErrors.length} 条`)
+  result.problems = problems
+  fs.writeFileSync(path.join(OUT, 'panel-check.json'), JSON.stringify(result, null, 2))
+  console.log(JSON.stringify(result, null, 2))
+  if (problems.length) {
+    console.error('\n断言失败：')
+    for (const problem of problems) console.error(' -', problem)
+    process.exitCode = 1
+  } else {
+    console.log('\n面板自检通过')
+  }
+} finally {
+  await browser.close()
+}

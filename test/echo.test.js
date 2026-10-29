@@ -198,6 +198,8 @@ test('白名单里的每个端点都要有明确归属（回写 or 已知无需�
     'session/updateQueue',
     'session/selectModel',
     'session/modelCatalog',
+    // 会话投影：只读，供子代理目录 / plan 状态使用
+    'session/projections',
     'session/attachment',
     'directoryPicker/list',
     // 上传只产生 receiptId，侧栏没有可见状态变化
@@ -208,6 +210,8 @@ test('白名单里的每个端点都要有明确归属（回写 or 已知无需�
     // T17 远端文件面板：只读
     'workspaceFiles/list',
     'workspaceFiles/read',
+    // 文档预览的二进制字节：只读，结果进右侧栏 tab
+    'workspaceFiles/readBytes',
     'workspaceFiles/stat',
     // 「@」/skill 候选源：只读
     'fileReferences/list',
@@ -221,6 +225,13 @@ test('白名单里的每个端点都要有明确归属（回写 or 已知无需�
     'terminal/create',
     'terminal/rename',
     'terminal/close',
+    // 定时任务：状态活在右侧栏任务页签/自动化任务页，不进侧栏快照。
+    // catalog 由宿主半把各在线 Host 合成一份（/api/schedule），这里只做转发。
+    'schedule/catalog',
+    'schedule/list',
+    'schedule/history',
+    'schedule/update',
+    'schedule/delete',
   ])
   const unaccounted = [...RPC_ALLOWLIST].filter((endpoint) => !handled.has(endpoint) && !byDesign.has(endpoint))
   assert.deepEqual(unaccounted, [], `这些端点在 applyEchoToWorkspaces 里没有归属：${unaccounted.join(', ')}`)

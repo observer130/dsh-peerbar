@@ -4,19 +4,20 @@
 
 ## 项目速览
 
-- **是什么**：一个 DeepSeek Harness（dsh）插件。**在原生侧栏那一列里**把本机工作区/会话与多台远端（nv50 / m50）混排成一棵树；点远端会话在原生中栏续聊。形态见 `docs/实现方案-A.md`（ADR-001），需求以 `docs/功能复述.md` 为准。
+- **是什么**：一个 DeepSeek Harness（dsh）插件，**聚合多个 dsh 前端**：在官方侧栏那一列里列出本机 + 多台远端（nv50 / m50）的工作区与会话，点远端会话由官方中栏渲染、执行留在远端。需求以 `docs/意图.md` 为准（冻结），实现见 `docs/架构.md`。
 - **技术栈**：纯 JavaScript ESM，**无构建步骤**，目标零第三方依赖。宿主半跑在 Node，客户端半是浏览器 `__ModuleLoader__` bundle。
 - **目标宿主**：dsh `0.2.1-rc.2` / `rc.3`（两者都实测通过），profile `~/.dsh/profiles/desktop`。
-- **当前阶段**：v5（分页/标题同步/401 自愈/图片附件/命令/文件面板/模型切换）、v6（测试分层、视图偏好、拖拽排序、打包、未读、文件面板 SSE）已合入 `master`。v7 收尾随 0.7.0 合入：远端改名后主视图面包屑同步（binding 冻结 + 快照缓存的根因修复）、远端浏览器面板整体降级、文案统一；`ui-check` 增加面包屑断言。v8 起**远端终端已可用**（0.8.0）：官方右侧栏终端 + 本机插件双工 WS 代理，见 `docs/远端终端.md` 与 `scripts/ui-check.mjs` 的 `terminalPanel` 断言；早先「不做」的评估结论已被取代（`docs/spike-S4.md`）。v7 计划见 `docs/一期计划-v7.md`。
-- **两半结构**：`lib/index.js` 宿主半（注册路由、探活、拉取远端快照、缓存）；`lib/client.js` 客户端半（影子注册 `sidebar.workspaces`、`settings.section`；远端会话合成 SessionBinding 后交原生 `openSession`）。两半之间只通过同源 HTTP 通信。
+- **当前阶段**：`master` = v8（0.8.0，影子侧栏 + 远端终端）。`feat/native-federation` 换成**原生会话联邦**路线：不再注册 `sidebar.workspaces`，把远端工作区/会话投影进官方 store，官方侧栏/中栏原样渲染（已跑通：多主机树、打开远端会话、发消息、远端新建会话）。剩余：`session/control` 控制流（计划审批/提问）、联邦版 `ui-check`、离线态。现状与计划见 `docs/现状与计划.md`。
+- **两半结构**：`lib/index.js` 宿主半（注册路由、探活、拉取远端快照、缓存）；`lib/client.js` 客户端半（投影进官方 store、合成 SessionBinding、`settings.section`）。两半之间只通过同源 HTTP/WS 通信。
 
 ## 架构不变量
 
 这几条是设计前提，不是可调偏好：
 
-- **形态是硬约束**：远端工作区/会话必须出现在原生侧栏那棵树里（`sidebar.workspaces` 座位）。
-  **禁止**用「侧栏图标 + 中栏整页」、右侧 dock、全屏浮层来替代——上一版就是这么翻车的。
-- **本机数据不另拉一份**：用 slot 的 `useWorkspaces` / `useSessions` hooks，和官方树同源，避免同一会话两行。
+- **UI 全是官方的**：不注册 `sidebar.workspaces`、不自绘树、不重写中栏。远端数据投影进
+  官方 store（`workspaces.list` / `sessions.list`），官方组件自己渲染。
+  **禁止**「侧栏图标 + 中栏整页」、iframe、右侧 dock、全屏浮层——上一版就是这么翻车的。
+- **本机数据不另拉一份**：本机行来自官方 store 本身，远端行只在读路径合并，避免同一会话两行。
 
 - **浏览器不直连远端**。所有跨机请求由宿主半发起（远端 cookie 是 host-only + `SameSite=Strict`，浏览器跨 origin 拿不到）。
 - **远端只提供数据，不提供 UI**。不加载远端插件 bundle，不把远端 slot 接进来。
@@ -74,14 +75,14 @@ lib/identity.js  origin 归一化、hostId、虚拟 ID、cwd → 工作区
 lib/remote.js    令牌换 cookie、RPC 信封、session/list、分页、错误分类
 lib/rpc.js       远端 RPC 白名单（/hosts/<id>/rpc 只放行这张表）
 lib/stream.js    Remote 流通道：workspace/follow 归档集、workspaceFiles/changes（SSE）、
-                 双工 terminal/attach（send/close）
+                 双工 terminal/attach（send/close）、session/control 控制流
 lib/terminal.js  远端终端 WS 代理：浏览器 ↔ 本机 ↔ 远端 mux，端点白名单 + 帧转发
 lib/probe.js     探活状态机与退避
 lib/peers.js     每 Host 的快照编排、调度与缓存
 lib/codes.js     错误码，前后端共用
-lib/client.js    客户端半：sidebar.workspaces / settings.section + 远端会话绑定
+lib/client.js    客户端半：官方 store 投影 + 联邦写操作代理 + 远端会话 binding + settings.section
 test/            node:test 单测
-docs/            需求、插件开发规范、开发计划、spike 结论
+docs/            意图.md / 架构.md / 现状与计划.md（现行）；插件规范、官方侧栏规格、终端设计；archive/ 旧文档
 ```
 
 新增文件前先想归属；`lib/index.js` 只做装配，不堆业务。
@@ -90,8 +91,11 @@ docs/            需求、插件开发规范、开发计划、spike 结论
 
 完整清单见 `docs/插件开发规范.md`，这里只放会直接导致返工的部分：
 
-1. `sidebar.workspaces` 是 **single** slot 且被官方独占，**不能往里追加行**；本插件用 `priority: -1` 影子替换它、自己画整棵树。影子替换只替换渲染：官方 entry 的 `children` 声明仍然生效，**不要重复声明子座位**（会抛 `slot ... is already declared`）；rc.2 曾需要声明，升级后先跑 `scripts/compat-check.sh` 确认。
-   由此还有一条 rc.3 实测硬限制：影子 entry 没有自己的 `children`，runtime **不会注入** `props.renderSlot`；`ctx.slots.renderSlot` 只允许 root，补声明又撞官方声明。因此 `sidebar.workspaces.session.menu.item` / `session.row.action` 这类官方子座位在影子替换下接不回来，行内 action 只能自绘。要恢复组合必须上游提供 workspace additive slot，见 `docs/upstream-slot-proposal.md`。
+1. `sidebar.workspaces` 是 **single** slot 且被官方独占，**不能往里追加行**。v8 及以前用
+   `priority: -1` 影子替换、自绘整棵树；v9 起改成**不注册该座位**，把远端数据投影进官方 store
+   （`workspaces.list.buildSnapshot` 追加组、`sessions.list.getSnapshot` 合并行），官方 UI 原样渲染。
+   ⚠️ 不要退回影子替换：自绘树会丢官方菜单/拖拽/未读/派生面板，且每次宿主升级都要返工。
+   影子替换下的一堆历史坑（子座位接不回来、`renderSlot` 注入失败）只留在 `docs/archive/`。
 2. 插件自己注册的 `ctx.webServer` 路由**没有任何认证**——dsh 的浏览器 cookie 与 Host/Origin 校验只覆盖 `/api`。同源/回环 guard 必须自己写。
 3. `/api` 不是 REST：`POST /api/<namespace>/<method>` + `{ args }`，流式走 WS `/api/remote.mux`。
    插件自己的双工通道用 `ctx.webServer.registerUpgrade`（rc.3 已核实，见插件规范 §12）；
@@ -104,7 +108,7 @@ docs/            需求、插件开发规范、开发计划、spike 结论
 ## 代码风格
 
 - ESM，`node:` 前缀导入内置模块；两空格缩进；单引号；保留分号。
-- 侧栏样式只用 `dshp-*` 类名 + `--dsw-*` token；**禁止复制** `koUx-W_*` / `hP3ldq_*` 这类官方构建期哈希类名。`ui-check` 会断言 `.dshp-root` 内没有官方哈希类。
+- 侧栏是官方 UI，样式一律用 `--dsw-*` token；设置页/自绘组件用 `dshp-*` 类名，**禁止复制** `koUx-W_*` / `hP3ldq_*` 这类官方构建期哈希类名。
 - 零第三方依赖是目标。要 cookie jar 就写二十行，不拉 `tough-cookie`；新增依赖必须先问。
 - 宿主半日志只用 `ctx.logger`，前缀 `[peerbar]`；客户端半没有 `ctx.logger`，用 `console.info/warn/error`。两半都禁止 `console.log`。
 - 面向用户的文案走 `ctx.locale.register(ns, { zh, en })`，不把中文硬编码进渲染函数。
@@ -137,7 +141,7 @@ export function apply(ctx) {
    - `node --test test/*.test.js` 全绿；
    - `node --check lib/*.js` 通过；
    - **`scripts/ui-check.mjs` 全绿**（会自动登录本地实例、点开远端会话、截图、收集 console error）；
-   - 我**亲自看过截图**，并逐条对照 `docs/功能复述.md` 的交互表；
+   - 我**亲自看过截图**，并逐条对照 `docs/意图.md` §4 的交互表；
    - 宿主半改动已重启实例验证，客户端改动已刷新验证。
 4. 只要功能还有一项不对，就**不合**；需要保留进度就继续在该分支上 commit。
 5. 已经合错的，**回滚那次 merge**，不要「在新 commit 里顺手修」把 master 当成工作区。
@@ -153,6 +157,7 @@ scripts/dev-server.sh > .workbuddy/tmp/pb-web.log 2>&1 &
 # 2) 自动验收：登录 → 截图侧栏 → 展开远端组 → 点开会话 → 再截图 → 断言
 node scripts/ui-check.mjs --quick   # 日常：不建会话、不发消息、不调真模型（约 40s）
 node scripts/ui-check.mjs           # 发布前全量：含远端新建会话 + 真模型回复（≤180s）
+node scripts/panel-check.mjs        # 派生面板：远端文档预览 + 定时任务目录（缺数据记 skipped）
 ```
 
 - 产物在 `.workbuddy/tmp/`：`ui-1-sidebar.png`、`ui-2-remote-expanded.png`、
@@ -176,7 +181,7 @@ node scripts/ui-check.mjs           # 发布前全量：含远端新建会话 + 
 
 - 新增 slot、遮蔽或替换官方 UI（尤其 `sidebar.workspaces`）。
 - 引入第三方依赖。
-- 改 `docs/需求交接.md` 的验收项、非目标、里程碑。
+- 改 `docs/意图.md`（冻结的需求基线）的验收项、非目标、里程碑。
 - 任何写入 `~/.dsh/` 之外、或改动 dsh 安装目录的操作。
 
 **绝不**
@@ -184,6 +189,7 @@ node scripts/ui-check.mjs           # 发布前全量：含远端新建会话 + 
 - 提交令牌、cookie、证书私钥（`.gitignore` 已挡住 `dsh-peerbar.json`、`*-cache.json`、`*.pem`、`*.key`，别用 `-f` 绕过）。
 - 把令牌写进日志、错误 message 或任何响应体。
 - 做白名单外的转发、任意 WS 帧转发。
-- 任何跨机写操作——**终端是唯一显式例外**：用户亲手打开右侧栏终端标签时，经
-  `lib/terminal.js` 把 `terminal/attach|retain` 代理到该会话所属远端；没有后台写入、
-  没有自动执行，端点白名单之外一律拒绝。
+- 任何跨机写操作——**只有用户显式触发时例外**：
+  - 终端：亲手打开右侧栏终端标签，经 `lib/terminal.js` 代理 `terminal/attach|retain`；
+  - 定时任务：在任务详情里改期/删除，经 `schedule/update|delete` 代理到该任务所属 Host。
+  没有后台写入、没有自动执行，端点白名单之外一律拒绝。
