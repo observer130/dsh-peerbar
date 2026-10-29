@@ -8,7 +8,9 @@
  *   node scripts/ui-check.mjs --base <url>
  *
  * 产物：.workbuddy/tmp/ui-1-sidebar.png、ui-2-remote-expanded.png、ui-3-remote-session.png、
- *       ui-4-remote-new.png、ui-5-remote-terminal.png、ui-check.json
+ *       ui-4-remote-new.png、ui-5-remote-terminal.png、ui-6-remote-terminal.png、
+ *       ui-7-plan-preview.png、ui-0-add-workspace.png、ui-0b-add-workspace-remote.png、
+ *       ui-8-remote-workspace.png、ui-check.json
  * 退出码：0 通过；1 有断言失败或页面报错
  */
 import fs from 'node:fs'
@@ -192,6 +194,111 @@ try {
   const hostsSeen = new Set(remoteGroups.map((group) => group.host))
   if (hostNames.length > 1 && hostsSeen.size < hostNames.length) {
     problems.push(`只有 ${hostsSeen.size}/${hostNames.length} 台 Host 出现在侧栏`)
+  }
+
+  // ---- 1b) 远端组默认收起（1.2.0）----
+  // 官方把每个工作区画成一个可折叠分组；插件只在新组第一次出现时写一次折叠
+  // 状态（`uiWorkspace.view.setGroupExpanded`），用户手动展开后重载要保留。
+  const collapsed = await until(
+    '远端组默认收起',
+    () =>
+      page.evaluate((names) => {
+        const rows = [...document.querySelectorAll('[data-row-key^="workspace:"]')]
+        const remote = rows
+          .map((row) => ({
+            text: (row.innerText ?? '').replace(/\s+/g, ' ').trim(),
+            expanded: row.getAttribute('aria-expanded'),
+          }))
+          .filter((row) => names.some((name) => row.text.endsWith(` · ${name}`)))
+        const expandable = remote.filter((row) => row.expanded !== null)
+        if (expandable.length === 0) return null
+        if (!expandable.every((row) => row.expanded === 'false')) return null
+        return { remote: remote.length, expandable: expandable.length }
+      }, hostNames),
+    15000,
+  ).catch(() => null)
+  first.autoCollapse = collapsed
+  if (remoteGroups.length > 0 && !collapsed) problems.push('远端工作区组没有默认收起（15s 内仍展开）')
+
+  // ---- 1c) 「添加工作区」对话框：主机选择 + 远端目录浏览（1.2.0）----
+  const addButton = await page.evaluate(() => {
+    const buttons = [...document.querySelectorAll('button[aria-label]')].filter(
+      (node) => node.offsetParent !== null && (node.getAttribute('aria-label') ?? '').includes('工作区'),
+    )
+    const button = buttons.find((node) => node.closest('[class*="headerActions"]')) ?? buttons[0]
+    if (!button) return false
+    button.click()
+    return true
+  })
+  first.addWorkspaceButton = addButton
+  if (!addButton) problems.push('侧栏找不到「添加工作区」按钮')
+  const addDialog = addButton
+    ? await until(
+        '添加工作区对话框',
+        () =>
+          page.evaluate((names) => {
+            const input = document.querySelector('.dshp-pathInput')
+            if (!input) return null
+            const text = document.body.innerText ?? ''
+            return {
+              local: text.includes('本机'),
+              hosts: names.filter((name) => text.includes(name)),
+              path: input.value,
+            }
+          }, hostNames),
+        15000,
+      ).catch(() => null)
+    : null
+  first.addWorkspaceDialog = addDialog
+  if (addButton && !addDialog) problems.push('「添加工作区」没有弹出接管的目录对话框')
+  if (addDialog && !addDialog.local) problems.push('目录对话框缺少「本机」主机标签')
+  if (addDialog) {
+    const missing = hostNames.filter((name) => !addDialog.hosts.includes(name))
+    if (missing.length > 0) problems.push(`目录对话框缺少远程主机标签：${missing.join('、')}`)
+    await sleep(600) // 等 Modal 的入场动画结束，否则截图是半透明的
+    await page.screenshot({ path: path.join(OUT, 'ui-0-add-workspace.png') })
+
+    // 切到第一台远端主机：只读地列出远端目录，截图后取消（真正的写入在 §8）。
+    const switched = await page.evaluate((name) => {
+      const chip = [...document.querySelectorAll('button')].find(
+        (node) => node.offsetParent !== null && (node.innerText ?? '').trim() === name,
+      )
+      if (!chip) return false
+      chip.click()
+      return true
+    }, hostNames[0])
+    const remoteListing = switched
+      ? await until(
+          `${hostNames[0]} 目录列表`,
+          () =>
+            page.evaluate(() => {
+              const input = document.querySelector('.dshp-pathInput')
+              if (!input?.value) return null
+              const text = document.body.innerText ?? ''
+              if (text.includes('正在读取…')) return null
+              return { path: input.value, home: text.includes('主目录') }
+            }),
+          20000,
+        ).catch(() => null)
+      : null
+    first.addWorkspaceRemoteListing = remoteListing
+    if (switched && !remoteListing) problems.push(`切到 ${hostNames[0]} 后没有列出远端目录`)
+    if (remoteListing) {
+      await sleep(400)
+      await page.screenshot({ path: path.join(OUT, 'ui-0b-add-workspace-remote.png') })
+    }
+    await page.evaluate(() => {
+      const input = document.querySelector('.dshp-pathInput')
+      const dialogScope = input?.closest('[role="dialog"]') ?? document.body
+      const cancel = [...dialogScope.querySelectorAll('button')].find(
+        (node) => node.offsetParent !== null && (node.innerText ?? '').trim() === '取消',
+      )
+      cancel?.click()
+    })
+    const closed = await until('目录对话框关闭', () => page.evaluate(() => !document.querySelector('.dshp-pathInput')), 10000).catch(
+      () => false,
+    )
+    if (!closed) problems.push('目录对话框点取消后没有关闭')
   }
 
   // ---- 2) 展开第一个远端组 ----
@@ -585,6 +692,239 @@ try {
       first.planPreview.rearchived = await setArchived(planTarget, true)
       if (!first.planPreview.rearchived) problems.push('回档计划夹具会话失败')
     }
+  }
+
+  // ---- 8) 在远端目录上添加工作区（1.2.0）----
+  // 选一个远端已存在、但还没登记成工作区的目录：在对话框里选主机 → 输入路径 →
+  // 打开 → 远端 `workspace/create` → 侧栏出现「目录名 · 主机」→ 用
+  // `workspace/delete` 清掉。只注册/注销目录，不写任何文件。
+  if (!QUICK) {
+    const candidates = ['/tmp', '/home/nwj/peerbar-ui-check']
+    const target = await page.evaluate(async (paths) => {
+      const state = await fetch('/dsh-peerbar/api/state', { credentials: 'same-origin' }).then((response) => response.json())
+      for (const host of state?.hosts ?? []) {
+        if (host.status !== 'online') continue
+        const used = new Set((host.workspaces ?? []).map((workspace) => workspace.cwd))
+        const path = paths.find((candidate) => !used.has(candidate))
+        if (path) return { hostId: host.hostId, hostName: host.name, path }
+      }
+      return null
+    }, candidates)
+    first.remoteAddWorkspace = { target }
+
+    const findWorkspace = () =>
+      page.evaluate(async ({ hostId, path }) => {
+        const state = await fetch('/dsh-peerbar/api/state', { credentials: 'same-origin' }).then((response) => response.json())
+        const host = (state?.hosts ?? []).find((entry) => entry.hostId === hostId)
+        const workspace = (host?.workspaces ?? []).find((entry) => entry.cwd === path)
+        return workspace ? { workspaceId: workspace.workspaceId, cwd: workspace.cwd, title: `${workspace.name} · ${host.name}` } : null
+      }, target)
+
+    const remove = async () => {
+      const found = await findWorkspace().catch(() => null)
+      if (!found?.workspaceId) return { ok: true, skipped: '没有登记（无需清理）' }
+      const removed = await page.evaluate(async ({ hostId, workspaceId }) => {
+        const response = await fetch(`/dsh-peerbar/api/hosts/${encodeURIComponent(hostId)}/rpc`, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'content-type': 'application/json', 'x-dsh-peerbar-action': '1' },
+          body: JSON.stringify({ endpoint: 'workspace/delete', args: { request: { workspaceId } } }),
+        })
+        const payload = await response.json().catch(() => null)
+        return payload?.ok === true
+      }, { hostId: target.hostId, workspaceId: found.workspaceId })
+      return { ok: removed === true, workspaceId: found.workspaceId }
+    }
+
+    if (!target) {
+      first.remoteAddWorkspace.skipped = '没有可用的远端候选目录（都已被登记成工作区）'
+    } else {
+      try {
+        const opened = await page.evaluate(() => {
+          const buttons = [...document.querySelectorAll('button[aria-label]')].filter(
+            (node) => node.offsetParent !== null && (node.getAttribute('aria-label') ?? '').includes('工作区'),
+          )
+          const button = buttons.find((node) => node.closest('[class*="headerActions"]')) ?? buttons[0]
+          button?.click()
+          return Boolean(button)
+        })
+        if (!opened) throw new Error('找不到「添加工作区」按钮')
+        // 桌面端的本机选择器是 native 能力：对话框先渲染「系统对话框」分支，
+        // 路径框只在非 native 分支里，所以先切到远端主机再等路径框。
+        await until(
+          '对话框打开',
+          () => page.evaluate(() => (document.body.innerText ?? '').includes('选择工作区目录')),
+          15000,
+        )
+        // Modal 入场动画的第一帧里子树还没布局（offsetParent 为 null），按几何尺寸
+        // 判断可见性并轮询点击，避免「标签明明在屏幕上却找不到」。
+        const chipClicked = await until(
+          `主机标签 ${target.hostName}`,
+          () =>
+            page.evaluate((name) => {
+              const chip = [...document.querySelectorAll('button')].find((node) => {
+                if ((node.innerText ?? '').trim() !== name) return false
+                const rect = node.getBoundingClientRect()
+                return rect.width > 0 && rect.height > 0
+              })
+              if (!chip) return null
+              chip.click()
+              return true
+            }, target.hostName),
+          15000,
+        ).catch(() => false)
+        if (!chipClicked) throw new Error(`对话框里找不到主机标签 ${target.hostName}`)
+        await until(
+          '路径框',
+          () =>
+            page.evaluate(() => {
+              const input = document.querySelector('.dshp-pathInput')
+              if (!input) return null
+              const rect = input.getBoundingClientRect()
+              return rect.width > 0 && rect.height > 0 ? true : null
+            }),
+          15000,
+        )
+        // 直接在页面里写值 + 发回车：三击选中在无头浏览器里不可靠（会把路径
+        // 拼成 /home/nwj/tmp），键盘焦点也可能被 Modal 的 focus trap 拿走。
+        await page.evaluate((path) => {
+          const input = document.querySelector('.dshp-pathInput')
+          if (!input) return
+          const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+          setter.call(input, path)
+          input.dispatchEvent(new Event('input', { bubbles: true }))
+          input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+        }, target.path)
+        const listed = await until(
+          `列出 ${target.path}`,
+          () =>
+            page.evaluate((path) => {
+              const input = document.querySelector('.dshp-pathInput')
+              if (!input || input.value !== path) return null
+              if ((document.body.innerText ?? '').includes('正在读取…')) return null
+              return { path }
+            }, target.path),
+          20000,
+        ).catch(() => null)
+        if (!listed) throw new Error(`输入路径后没有列出 ${target.path}`)
+        // 只在对话框里找按钮：计划页签自己也有一个「打开」，先到先得会点错。
+        const confirmed = await page.evaluate(() => {
+          const input = document.querySelector('.dshp-pathInput')
+          const scope = input?.closest('[role="dialog"]') ?? input?.parentElement
+          if (!scope) return false
+          const open = [...scope.querySelectorAll('button')].find(
+            (node) => node.offsetParent !== null && (node.innerText ?? '').trim() === '打开',
+          )
+          open?.click()
+          return Boolean(open)
+        })
+        if (!confirmed) throw new Error('对话框里找不到「打开」按钮')
+        const registered = await until('远端登记新工作区', findWorkspace, 30000)
+        first.remoteAddWorkspace.registered = registered
+        const appeared = await until(
+          '侧栏出现新工作区组',
+          () =>
+            page.evaluate((expected) => {
+              const rows = [...document.querySelectorAll('[data-row-key^="workspace:"]')]
+              return rows.some((row) => (row.innerText ?? '').includes(expected)) ? true : null
+            }, registered.title),
+          25000,
+        )
+          .then(() => true)
+          .catch(() => false)
+        first.remoteAddWorkspace.appeared = appeared
+        if (!appeared) problems.push(`在 ${target.hostName} 上添加工作区后侧栏没有出现「${registered.title}」`)
+        await sleep(400)
+        await page.screenshot({ path: path.join(OUT, 'ui-8-remote-workspace.png') })
+      } catch (error) {
+        first.remoteAddWorkspace.error = String(error?.message ?? error)
+        first.remoteAddWorkspace.dialog = await page
+          .evaluate(() => {
+            const input = document.querySelector('.dshp-pathInput')
+            const scope = input?.closest('[role="dialog"]')
+            return scope ? (scope.innerText ?? '').slice(0, 400) : null
+          })
+          .catch(() => null)
+        await page.screenshot({ path: path.join(OUT, 'ui-8-debug.png') }).catch(() => {})
+        problems.push(`远端添加工作区失败：${first.remoteAddWorkspace.error}`)
+      } finally {
+        const removed = await remove().catch((error) => ({ ok: false, reason: String(error) }))
+        first.remoteAddWorkspace.cleanup = removed
+        if (removed.ok !== true) problems.push('清理远端测试工作区失败（远端可能残留一条工作区登记）')
+        const unregistered = await until('远端登记已删除', async () => ((await findWorkspace().catch(() => null)) ? null : true), 25000)
+          .then(() => true)
+          .catch(() => false)
+        first.remoteAddWorkspace.removed = unregistered
+        if (!unregistered) problems.push('测试工作区没有从 /state 里消失')
+        if (first.remoteAddWorkspace.registered) {
+          const rowGone = await until(
+            '侧栏移除测试工作区',
+            () =>
+              page.evaluate((expected) => {
+                const rows = [...document.querySelectorAll('[data-row-key^="workspace:"]')]
+                return rows.some((row) => (row.innerText ?? '').includes(expected)) ? null : true
+              }, first.remoteAddWorkspace.registered.title),
+            25000,
+          )
+            .then(() => true)
+            .catch(() => false)
+          first.remoteAddWorkspace.rowGone = rowGone
+          if (!rowGone) problems.push('测试工作区注销后侧栏行没有消失')
+        }
+      }
+    }
+  }
+
+  // ---- 9) 一次性迁移：升级后第一次加载把已展开的远端组也收起来 ----
+  // 官方会把用户展开的分组记在 `dsh.workspace.view.v5`（重载保留）；清掉插件的
+  // 两个标记再重载，插件应把已有远端组收一次。放在最后跑，避免重载干扰前面的段落。
+  const migrationProbe = await page.evaluate(() => {
+    const row = [...document.querySelectorAll('[data-row-key^="workspace:"]')].find((node) =>
+      / · (nv50|m50)$/.test((node.innerText ?? '').trim()),
+    )
+    if (!row) return null
+    const key = row.getAttribute('data-row-key') ?? ''
+    row.click()
+    return { key, workspaceId: key.replace(/^workspace:/, '') }
+  })
+  if (migrationProbe) {
+    await sleep(900)
+    const persisted = await page.evaluate((workspaceId) => {
+      const raw = localStorage.getItem('dsh.workspace.view.v5') ?? ''
+      return { hasKey: raw.includes(workspaceId), rawLength: raw.length }
+    }, migrationProbe.workspaceId)
+    first.autoCollapsePersisted = persisted
+    if (!persisted.hasKey) problems.push('展开远端组后官方没有把折叠状态写进 localStorage（迁移无法验证）')
+    await page.evaluate(() => {
+      localStorage.removeItem('dsh-peerbar.collapsedRemote.v1')
+      localStorage.removeItem('dsh-peerbar.collapsedRemote.migrated.v1')
+    })
+    await page.reload({ waitUntil: 'networkidle2', timeout: 40000 })
+    await until(
+      '重载后出现工作区行',
+      () => page.evaluate(() => document.querySelectorAll('[data-row-key^="workspace:"]').length > 0),
+      30000,
+    )
+    await sleep(6000)
+    const reCollapsed = await until(
+      '重载后远端组再次收起',
+      () =>
+        page.evaluate((names) => {
+          const rows = [...document.querySelectorAll('[data-row-key^="workspace:"]')]
+          const remote = rows
+            .map((row) => ({
+              text: (row.innerText ?? '').replace(/\s+/g, ' ').trim(),
+              expanded: row.getAttribute('aria-expanded'),
+            }))
+            .filter((row) => names.some((name) => row.text.endsWith(` · ${name}`)))
+          const expandable = remote.filter((row) => row.expanded !== null)
+          if (expandable.length === 0) return null
+          return expandable.every((row) => row.expanded === 'false') ? true : null
+        }, hostNames),
+      15000,
+    ).catch(() => false)
+    first.autoCollapseAfterReload = reCollapsed
+    if (!reCollapsed) problems.push('重载后迁移没有把已展开的远端组收起来')
   }
 
   // ---- 收尾 ----

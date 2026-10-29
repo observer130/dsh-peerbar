@@ -2,6 +2,27 @@
 
 本项目在 0.5.0 之前没有正式发布（只能填仓库绝对路径安装），下面是按能力阶段整理的历史。
 
+## 1.2.0 — 远程工作区管理优化（2026-10-29）
+
+- **远端工作区组默认收起**：官方侧栏的分组默认就是收起的，但用户展开过的组会被官方
+  记住（`dsh.workspace.view.v5`）。插件用 `ctx.uiWorkspace.view.setGroupExpanded`
+  + 本地账本 `dsh-peerbar.collapsedRemote.v1` 做到：新出现的远端组收一次；升级后
+  **第一次**加载把已有远端组也收一次（一次性迁移标记 `.migrated.v1`），之后完全以
+  官方记住的展开状态为准。设置页新增「收起全部远端工作区」按钮
+- **「添加工作区」支持远端目录**：接管官方 single 座位
+  `sidebar.workspaces.directoryFlow` 与 `conversation.hero.workspace.directoryFlow`，
+  对话框顶部可选「本机 / nv50 / m50」；远端经只读 `directoryPicker/list` 浏览、
+  `workspace/create {path}` 在远端注册，本机分支仍交回官方 `onPicked`（建工作区 +
+  开新会话）。路径框可直接编辑回车跳转；桌面端本机是 native picker 时退化为系统对话框
+- **上游提案**：`docs/上游提案-侧栏分组座位.md` 说明为什么「本机/nv50/m50」分组行
+  需要官方新增座位（list 分组头或 `WorkspaceView.section`），以及两种增量 API 建议
+- **自检**：`ui-check` 新增 §1b（加载后远端组必须全收起）、§9（展开→清标记→重载→
+  又被收起的迁移验证）、§1c（对话框有主机标签且能列远端目录）、§8（在 nv50 的 `/tmp`
+  注册工作区 → 侧栏出现 `tmp · nv50` → `workspace/delete` 清掉）
+- **验证**：`node --check` 通过；`node --test` 78 pass；`node scripts/ui-check.mjs` 全绿
+  （截图 `ui-0-add-workspace.png`、`ui-0b-add-workspace-remote.png`、`ui-8-remote-workspace.png`）；
+  `node scripts/panel-check.mjs` 通过（远端文档预览按数据记 skipped）
+
 ## 1.1.0 — 计划预览全文 + 定时任务实时刷新（2026-10-29）
 
 接上联邦路线剩下的两条真实缺口。

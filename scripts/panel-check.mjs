@@ -163,7 +163,9 @@ try {
       const text = document.body.innerText ?? ''
       return { tabs, tail: text.slice(-600) }
     })
-    const opened = preview.tabs.some((tab) => tab.includes(readable))
+    // 预览页签的标题是文件名（不带目录），正文里的引用可能带 `docs/` 前缀。
+    const base = readable.split('/').pop()
+    const opened = preview.tabs.some((tab) => tab.includes(base))
     const failed = /无法读取|读取失败|不存在|EISDIR|permission denied/i.test(preview.tail.slice(-260))
     result.preview = {
       title: entry.title,
