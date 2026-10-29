@@ -164,6 +164,31 @@ try {
     const firstRemote = tree.groups.findIndex((group) => group.host)
     if (firstRemote < lastLocal) problems.push('远端组排在本机组前面了（要求本机在前、远端接后）')
   }
+  // 回归：按目录合成、又没有正式会话的空组不该出现（用户验收时撞到的「未分组 · nv50」）
+  const emptySynthetic = await page.evaluate(async () => {
+    try {
+      const state = await fetch('/dsh-peerbar/api/state', { credentials: 'same-origin' }).then((response) => response.json())
+      const text = document.body.innerText ?? ''
+      const leaked = []
+      for (const host of state?.hosts ?? []) {
+        for (const workspace of host.workspaces ?? []) {
+          if (typeof workspace.workspaceId === 'string' && workspace.workspaceId) continue
+          const formal = (workspace.sessions ?? []).filter((session) => session.archived !== true && session.blank !== true)
+          if (formal.length > 0) continue
+          const title = `${workspace.name ?? '未分组'} · ${host.name}`
+          if (text.includes(title)) leaked.push(title)
+        }
+      }
+      return leaked
+    } catch {
+      return []
+    }
+  })
+  first.emptySyntheticLeaked = emptySynthetic
+  if (emptySynthetic.length > 0) {
+    problems.push(`空的合成工作区出现在了侧栏：${emptySynthetic.join('、')}`)
+  }
+
   const hostsSeen = new Set(remoteGroups.map((group) => group.host))
   if (hostNames.length > 1 && hostsSeen.size < hostNames.length) {
     problems.push(`只有 ${hostsSeen.size}/${hostNames.length} 台 Host 出现在侧栏`)
