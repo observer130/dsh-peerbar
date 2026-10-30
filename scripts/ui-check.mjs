@@ -10,7 +10,8 @@
  * 产物：.workbuddy/tmp/ui-1-sidebar.png、ui-2-remote-expanded.png、ui-3-remote-session.png、
  *       ui-4-remote-new.png、ui-5-remote-terminal.png、ui-6-remote-terminal.png、
  *       ui-7-plan-preview.png、ui-0-add-workspace.png、ui-0b-add-workspace-remote.png、
- *       ui-8-remote-workspace.png、ui-check.json
+ *       ui-8-remote-workspace.png、ui-9-grouping-off.png、ui-10-settings.png、
+ *       ui-10b-add-host.png、ui-11-changes-card.png、ui-check.json
  * 退出码：0 通过；1 有断言失败或页面报错
  */
 import fs from 'node:fs'
@@ -128,26 +129,51 @@ try {
     if (url.includes('/api/changes.')) directChanges.push({ status: response.status(), url: url.replace(/^https?:\/\/[^/]+/, '') })
   })
 
+  // 插件自己的路由失败要留证据（5xx 只会在 console 里留一行「Failed to load resource」，
+  // 看不出是哪个端点、为什么）。失败时把 body 一并发到 ui-check.json。
+  const apiErrors = []
+  page.on('response', async (response) => {
+    const url = response.url()
+    if (!url.includes('/dsh-peerbar/') || response.status() < 400) return
+    let body = ''
+    try {
+      body = (await response.text()).slice(0, 400)
+    } catch {
+      /* 忽略 */
+    }
+    apiErrors.push({ status: response.status(), url: url.replace(/^https?:\/\/[^/]+/, ''), body })
+  })
+
   await page.goto(base, { waitUntil: 'networkidle2', timeout: 40000 })
   // 官方树会异步出本机工作区，远端组要等第一轮 /state 回来（5s 内）。
   await until('侧栏出现工作区行', () => page.evaluate(() => document.querySelectorAll('[data-row-key^="workspace:"]').length > 0), 30000)
   // 远端组要等第一轮 /state（5s 内）投影进 store
   await sleep(6000)
 
-  /** 从页面里读 Host 名单（组名后缀是 `名字 · 主机名`）。 */
-  const hostNames = await page.evaluate(async () => {
+  /**
+   * 从页面里读 Host 名单。
+   *
+   * 侧栏不再把「· 主机名」写进工作区标题（主机行已经承担了来源），所以归属
+   * 只能从 `data-row-key` 读：合成的行 key 是 `workspace:peerbar:<hostId>:…`，
+   * 本机真工作区是 `workspace:<官方 id>`（不带前缀）。
+   */
+  const hosts = await page.evaluate(async () => {
     try {
       const response = await fetch('/dsh-peerbar/api/state', { credentials: 'same-origin' })
       const payload = await response.json()
-      return (payload?.hosts ?? []).map((host) => host.name).filter((name) => typeof name === 'string' && name)
+      return (payload?.hosts ?? [])
+        .filter((host) => typeof host?.hostId === 'string' && typeof host?.name === 'string' && host.name)
+        .map((host) => ({ hostId: host.hostId, name: host.name }))
     } catch {
       return []
     }
   })
+  const hostNames = hosts.map((host) => host.name)
   if (hostNames.length === 0) problems.push('没有读到任何 Host（/state.hosts 为空）')
 
   const readTree = () =>
-    page.evaluate((names) => {
+    page.evaluate((hostList) => {
+      const byId = new Map(hostList.map((host) => [host.hostId, host.name]))
       const rows = [...document.querySelectorAll('[data-row-key^="workspace:"], [data-row-key^="session:"]')]
       const groups = []
       const sessions = []
@@ -155,11 +181,15 @@ try {
         const text = (row.innerText ?? '').replace(/\s+/g, ' ').trim()
         const key = row.getAttribute('data-row-key') ?? ''
         const isGroup = key.startsWith('workspace:')
-        const host = names.find((name) => text.endsWith(` · ${name}`))
+        // 主机根的 key 以 `:hostroot` 结尾（后面没有冒号），工作区/会话是 `:ws:`/`:sess:`
+        const match = /^(?:workspace|session):peerbar:([^:]+):(hostroot|ws|sess)(?::|$)/.exec(key)
+        const hostId = match ? match[1] : null
         const entry = {
           key,
           text,
-          host: host ?? null,
+          hostId,
+          host: hostId && hostId !== 'local' ? byId.get(hostId) ?? hostId : null,
+          isHostRow: match ? match[2] === 'hostroot' : false,
           expanded: row.getAttribute('aria-expanded'),
           // 官方"按工作区树"靠这个 CSS 变量做缩进：主机行 0px，子工作区 12px
           indent: getComputedStyle(row).getPropertyValue('--dsh-workspace-indent').trim(),
@@ -176,14 +206,14 @@ try {
         composer: Boolean(document.querySelector('textarea, [contenteditable="true"]')),
         body: (document.body.innerText ?? '').slice(0, 4000),
       }
-    }, hostNames)
+    }, hosts)
 
   // ---- 1) 树的形态：主机分组（1.2.0 起默认开）----
   // 官方树支持任意层级，主机层是投影出来的：远端路径带 `主机:` 前缀、每台主机一个
   // 合成父工作区（本机用 `/`）。所以加载后应该只有「本机 / 各主机」三行。
   const tree = await readTree()
   const hostRowTexts = ['本机', ...hostNames]
-  const isHostRow = (row) => hostRowTexts.includes(row.text)
+  const isHostRow = (row) => row.isHostRow === true
   const hostRows = tree.groups.filter(isHostRow)
   const workspaceRowsAtLoad = tree.groups.filter((row) => !isHostRow(row))
   const first = {
@@ -224,8 +254,8 @@ try {
   await sleep(900)
 
   const expandedTree = await readTree()
-  const remoteGroups = expandedTree.groups.filter((group) => group.host)
-  const localGroups = expandedTree.groups.filter((group) => !group.host && !isHostRow(group))
+  const remoteGroups = expandedTree.groups.filter((group) => !isHostRow(group) && group.hostId && group.hostId !== 'local')
+  const localGroups = expandedTree.groups.filter((group) => !isHostRow(group) && !group.hostId)
   first.localGroups = localGroups.map((group) => group.text)
   first.remoteGroups = remoteGroups.map((group) => group.text)
   first.childIndent = {
@@ -236,13 +266,13 @@ try {
   await page.screenshot({ path: path.join(OUT, 'ui-1b-hosts-expanded.png') })
 
   if (localGroups.length === 0) problems.push('展开「本机」后没有本机工作区行')
-  if (remoteGroups.length === 0) problems.push('展开远端主机后没有远端工作区行（组名应以「 · 主机名」结尾）')
+  if (remoteGroups.length === 0) problems.push('展开远端主机后没有远端工作区行（行 key 应以 workspace:peerbar:<hostId>:ws: 开头）')
   if (first.childIndent.remote !== '12px') problems.push(`子工作区行缩进应为 12px，实际 ${first.childIndent.remote}`)
   if (first.childIndent.host !== '0px') problems.push(`主机行缩进应为 0px，实际 ${first.childIndent.host}`)
 
-  const hostsSeen = new Set(remoteGroups.map((group) => group.host))
+  const hostsSeen = new Set(remoteGroups.map((group) => group.hostId))
   if (hostNames.length > 1 && hostsSeen.size < hostNames.length) {
-    problems.push(`只有 ${hostsSeen.size}/${hostNames.length} 台 Host 出现在侧栏`)
+    problems.push(`只有 ${hostsSeen.size}/${hostNames.length} 台 Host 出现在侧栏（${[...hostsSeen].join('、')}）`)
   }
 
   // 主机行不是真工作区：悬停的「新建会话」必须被拦下（给提示、不建会话）
@@ -271,19 +301,24 @@ try {
     problems.push(`点主机行建会话没有给出提示（notice=${hostCreateAfter.notice}）`)
   }
 
-  // 回归：按目录合成、又没有正式会话的空组不该出现（用户验收时撞到的「未分组 · nv50」）
+  // 回归：按目录合成、又没有正式会话的空组不该出现（用户验收时撞到的「未分组」空组）
   const emptySynthetic = await page.evaluate(async () => {
     try {
       const state = await fetch('/dsh-peerbar/api/state', { credentials: 'same-origin' }).then((response) => response.json())
-      const text = document.body.innerText ?? ''
+      const lines = (document.body.innerText ?? '').split('\n').map((line) => line.trim())
       const leaked = []
       for (const host of state?.hosts ?? []) {
         for (const workspace of host.workspaces ?? []) {
           if (typeof workspace.workspaceId === 'string' && workspace.workspaceId) continue
           const formal = (workspace.sessions ?? []).filter((session) => session.archived !== true && session.blank !== true)
           if (formal.length > 0) continue
-          const title = `${workspace.name ?? '未分组'} · ${host.name}`
-          if (text.includes(title)) leaked.push(title)
+          const title = workspace.name ?? '未分组'
+          // 有 cwd 就按虚拟 id 精确查行；没有（更边缘）再退回整行文本比对。
+          const key = typeof workspace.cwd === 'string' && workspace.cwd ? `workspace:peerbar:${host.hostId}:ws:${workspace.cwd}` : null
+          const shown = key
+            ? Boolean(document.querySelector(`[data-row-key="${CSS.escape(key)}"]`))
+            : lines.includes(title)
+          if (shown) leaked.push(`${title}（${workspace.cwd ?? '无路径'}）`)
         }
       }
       return leaked
@@ -299,22 +334,29 @@ try {
   // ---- 1b) 远端工作区组默认收起（1.2.0）----
   // 主机展开后，子工作区（会话组）应全部收起；插件只在新组第一次出现时写一次
   // 折叠状态（`uiWorkspace.view.setGroupExpanded`），用户手动展开后重载要保留。
+  const readRemoteRows = () =>
+    page.evaluate(() =>
+      [...document.querySelectorAll('[data-row-key^="workspace:"]')]
+        .map((row) => ({
+          key: row.getAttribute('data-row-key') ?? '',
+          text: (row.innerText ?? '').replace(/\s+/g, ' ').trim(),
+          expanded: row.getAttribute('aria-expanded'),
+        }))
+        .filter((row) => {
+          const match = /^workspace:peerbar:([^:]+):ws:/.exec(row.key)
+          return Boolean(match) && match[1] !== 'local'
+        }),
+    )
+
   const collapsed = await until(
     '远端工作区组默认收起',
     () =>
-      page.evaluate((names) => {
-        const rows = [...document.querySelectorAll('[data-row-key^="workspace:"]')]
-        const remote = rows
-          .map((row) => ({
-            text: (row.innerText ?? '').replace(/\s+/g, ' ').trim(),
-            expanded: row.getAttribute('aria-expanded'),
-          }))
-          .filter((row) => names.some((name) => row.text.endsWith(` · ${name}`)))
+      readRemoteRows().then((remote) => {
         const expandable = remote.filter((row) => row.expanded !== null)
         if (expandable.length === 0) return null
         if (!expandable.every((row) => row.expanded === 'false')) return null
         return { remote: remote.length, expandable: expandable.length }
-      }, hostNames),
+      }),
     15000,
   ).catch(() => null)
   first.autoCollapse = collapsed
@@ -520,7 +562,11 @@ try {
         20000,
       ).catch(() => false)
       first.remoteCreated = created
-      if (!created) problems.push('在远端组新建会话后，组里没有出现新会话行')
+      if (!created) {
+        problems.push(
+          `在远端组新建会话后，组里没有出现新会话行（插件路由失败：${JSON.stringify(apiErrors.slice(-2))}）`,
+        )
+      }
       await page.screenshot({ path: path.join(OUT, 'ui-4-remote-new.png') })
 
       // 会话视图起来 + composer 可写
@@ -675,7 +721,9 @@ try {
               hostName: host.name,
               rawId: session.rawId,
               title: session.title,
-              workspaceTitle: `${workspace.name ?? '未分组'} · ${host.name}`,
+              hostRowKey: `workspace:peerbar:${host.hostId}:hostroot`,
+              workspaceKey: `workspace:${workspace.id ?? ''}`,
+              workspaceTitle: workspace.name ?? '未分组',
             }
           }
         }
@@ -713,12 +761,12 @@ try {
       const planRow = await until(
         '计划夹具会话出现在侧栏',
         async () => {
-          await page.evaluate((title) => {
-            const group = [...document.querySelectorAll('[data-row-key^="workspace:"]')].find((row) =>
-              (row.innerText ?? '').includes(title),
-            )
-            if (group && group.getAttribute('aria-expanded') !== 'true') group.click()
-          }, planTarget.workspaceTitle)
+          await page.evaluate(([hostKey, workspaceKey]) => {
+            for (const key of [hostKey, workspaceKey]) {
+              const row = document.querySelector(`[data-row-key="${CSS.escape(key)}"]`)
+              if (row && row.getAttribute('aria-expanded') !== 'true') row.click()
+            }
+          }, [planTarget.hostRowKey, planTarget.workspaceKey])
           return page.evaluate(
             (key) => {
               const row = document.querySelector(`[data-row-key="${key}"]`)
@@ -796,8 +844,9 @@ try {
 
   // ---- 8) 在远端目录上添加工作区（1.2.0）----
   // 选一个远端已存在、但还没登记成工作区的目录：在对话框里选主机 → 输入路径 →
-  // 打开 → 远端 `workspace/create` → 侧栏出现「目录名 · 主机」→ 用
-  // `workspace/delete` 清掉。只注册/注销目录，不写任何文件。
+  // 打开 → 远端 `workspace/create` → 侧栏出现该工作区行（按投影出来的行 key
+  // 精确匹配，不靠标题文本）→ 用 `workspace/delete` 清掉。只注册/注销目录，
+  // 不写任何文件。
   if (!QUICK) {
     const candidates = ['/tmp', '/home/nwj/peerbar-ui-check']
     const target = await page.evaluate(async (paths) => {
@@ -817,7 +866,14 @@ try {
         const state = await fetch('/dsh-peerbar/api/state', { credentials: 'same-origin' }).then((response) => response.json())
         const host = (state?.hosts ?? []).find((entry) => entry.hostId === hostId)
         const workspace = (host?.workspaces ?? []).find((entry) => entry.cwd === path)
-        return workspace ? { workspaceId: workspace.workspaceId, cwd: workspace.cwd, title: `${workspace.name} · ${host.name}` } : null
+        return workspace
+          ? {
+              workspaceId: workspace.workspaceId,
+              cwd: workspace.cwd,
+              title: workspace.name,
+              rowKey: `workspace:${workspace.id ?? ''}`,
+            }
+          : null
       }, target)
 
     const remove = async () => {
@@ -925,9 +981,8 @@ try {
           '侧栏出现新工作区组',
           () =>
             page.evaluate((expected) => {
-              const rows = [...document.querySelectorAll('[data-row-key^="workspace:"]')]
-              return rows.some((row) => (row.innerText ?? '').includes(expected)) ? true : null
-            }, registered.title),
+              return document.querySelector(`[data-row-key="${CSS.escape(expected)}"]`) ? true : null
+            }, registered.rowKey),
           25000,
         )
           .then(() => true)
@@ -961,9 +1016,8 @@ try {
             '侧栏移除测试工作区',
             () =>
               page.evaluate((expected) => {
-                const rows = [...document.querySelectorAll('[data-row-key^="workspace:"]')]
-                return rows.some((row) => (row.innerText ?? '').includes(expected)) ? null : true
-              }, first.remoteAddWorkspace.registered.title),
+                return document.querySelector(`[data-row-key="${CSS.escape(expected)}"]`) ? null : true
+              }, first.remoteAddWorkspace.registered.rowKey),
             25000,
           )
             .then(() => true)
@@ -975,19 +1029,21 @@ try {
     }
   }
 
-  // ---- 9) 折叠迁移 + 分组开关（1.2.0）----
+  // ---- 9) 折叠迁移 + 分组方式联动（1.2.0）----
   // 9a 一次性迁移：展开一个远端工作区组 → 官方记住 → 清插件标记重载 → 又被收起。
-  // 9b 视图选项切到「按工作区」→ 开关自动关、行回到平铺（真实路径、无主机行）。
-  // 9c 设置页把「按主机分组」打开 → 回到主机分组。
-  const probe = await page.evaluate((names) => {
-    const row = [...document.querySelectorAll('[data-row-key^="workspace:"]')].find((node) =>
-      names.some((name) => (node.innerText ?? '').trim().endsWith(` · ${name}`)),
-    )
+  // 9b 视图选项切到「按工作区」→ 分组自动退场、行回到平铺（真实路径 + 主机后缀）。
+  // 9c 切回「按工作区树」→ 主机行回来。
+  // 9d 设置页「远程主机」：没有侧栏块、没有排序按钮；「添加」开一个登记窗口。
+  const probe = await page.evaluate(() => {
+    const row = [...document.querySelectorAll('[data-row-key^="workspace:"]')].find((node) => {
+      const match = /^workspace:peerbar:([^:]+):ws:/.exec(node.getAttribute('data-row-key') ?? '')
+      return Boolean(match) && match[1] !== 'local' && node.getAttribute('aria-expanded') !== null
+    })
     if (!row) return null
     const key = row.getAttribute('data-row-key') ?? ''
     row.click()
     return { key, workspaceId: key.replace(/^workspace:/, '') }
-  }, hostNames)
+  })
   first.migrationProbe = probe
   if (probe) {
     await sleep(900)
@@ -1015,18 +1071,11 @@ try {
     const reCollapsed = await until(
       '重载后远端组再次收起',
       () =>
-        page.evaluate((names) => {
-          const rows = [...document.querySelectorAll('[data-row-key^="workspace:"]')]
-          const remote = rows
-            .map((row) => ({
-              text: (row.innerText ?? '').replace(/\s+/g, ' ').trim(),
-              expanded: row.getAttribute('aria-expanded'),
-            }))
-            .filter((row) => names.some((name) => row.text.endsWith(` · ${name}`)))
+        readRemoteRows().then((remote) => {
           const expandable = remote.filter((row) => row.expanded !== null)
           if (expandable.length === 0) return null
           return expandable.every((row) => row.expanded === 'false') ? true : null
-        }, hostNames),
+        }),
       15000,
     ).catch(() => false)
     first.autoCollapseAfterReload = reCollapsed
@@ -1035,44 +1084,81 @@ try {
     problems.push('找不到任何远端工作区行（迁移无法验证）')
   }
 
-  // 9b 视图选项 → 按工作区：分组自动关
-  const menuOpened = await page.evaluate(() => {
-    const button = [...document.querySelectorAll('button[aria-label]')].find(
-      (node) => node.getAttribute('aria-label') === '视图选项',
-    )
-    if (!button) return false
-    button.click()
+  // 9b 视图选项 → 按工作区：分组自动退场，行为平铺的真实路径
+  const openViewOptions = async () => {
+    const opened = await page.evaluate(() => {
+      const button = [...document.querySelectorAll('button[aria-label]')].find(
+        (node) => node.getAttribute('aria-label') === '视图选项',
+      )
+      if (!button) return false
+      button.click()
+      return true
+    })
+    if (!opened) problems.push('找不到「视图选项」按钮')
+    await sleep(700)
+  }
+  const clickViewOption = async (label) => {
+    const point = await page.evaluate((text) => {
+      const nodes = [...document.querySelectorAll('*')].filter(
+        (node) => (node.innerText ?? '').trim() === text && node.children.length === 0 && node.offsetParent !== null,
+      )
+      const node = nodes[0]
+      if (!node) return null
+      const rect = node.getBoundingClientRect()
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+    }, label)
+    if (!point) {
+      problems.push(`视图选项里找不到「${label}」`)
+      return false
+    }
+    await page.mouse.click(point.x, point.y)
     return true
-  })
-  if (!menuOpened) problems.push('找不到「视图选项」按钮')
-  await sleep(700)
-  const groupItem = await page.evaluate(() => {
-    const nodes = [...document.querySelectorAll('*')].filter(
-      (node) => (node.innerText ?? '').trim() === '按工作区' && node.children.length === 0 && node.offsetParent !== null,
-    )
-    const node = nodes[0]
-    if (!node) return null
-    const rect = node.getBoundingClientRect()
-    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
-  })
-  if (!groupItem) problems.push('视图选项里找不到「按工作区」')
-  else await page.mouse.click(groupItem.x, groupItem.y)
+  }
+
+  await openViewOptions()
+  await clickViewOption('按工作区')
   await sleep(2200)
   const flat = await page.evaluate(() => ({
-    flag: localStorage.getItem('dsh-peerbar.hostGroups'),
-    rows: [...document.querySelectorAll('[data-row-key^="workspace:"]')].map((row) => (row.innerText ?? '').replace(/\s+/g, ' ').trim()),
+    flag: localStorage.getItem('dsh-peerbar.hostGroups.v2'),
+    rows: [...document.querySelectorAll('[data-row-key^="workspace:"]')].map((row) => ({
+      key: row.getAttribute('data-row-key') ?? '',
+      text: (row.innerText ?? '').replace(/\s+/g, ' ').trim(),
+    })),
   }))
-  const flatHostRows = flat.rows.filter((text) => ['本机', ...hostNames].includes(text))
-  first.groupingOff = { flag: flat.flag, rowCount: flat.rows.length, hostRows: flatHostRows }
-  if (flat.flag !== '0') problems.push(`切到「按工作区」后分组开关没有自动关（flag=${flat.flag}）`)
-  if (flatHostRows.length > 0) problems.push(`关掉分组后仍出现主机行：${flatHostRows.join('、')}`)
+  const flatHostRows = flat.rows.filter((row) => row.key.endsWith(':hostroot'))
+  first.groupingOff = { flag: flat.flag, rowCount: flat.rows.length, hostRows: flatHostRows.map((row) => row.text) }
+  if (flat.flag !== '0') problems.push(`切到「按工作区」后分组标记没有自动写回关（flag=${flat.flag}）`)
+  if (flatHostRows.length > 0) problems.push(`平铺后仍出现主机行：${flatHostRows.map((row) => row.text).join('、')}`)
   const expectedFlat = (first.localGroups?.length ?? 0) + (first.remoteGroups?.length ?? 0)
   if (expectedFlat > 0 && flat.rows.length !== expectedFlat) {
     problems.push(`平铺行数应为 ${expectedFlat}，实际 ${flat.rows.length}`)
   }
+  // 平铺时远端工作区标题要带「· 主机名」：没有主机行，后缀是唯一来源
+  const flatRemote = flat.rows.filter((row) => /^workspace:peerbar:[^:]+:ws:/.test(row.key) && !/:local:/.test(row.key))
+  const flatMissingSuffix = flatRemote.filter((row) => !hostNames.some((name) => row.text.endsWith(` · ${name}`)))
+  first.flatSuffix = { remote: flatRemote.length, missing: flatMissingSuffix.map((row) => row.text) }
+  if (flatRemote.length > 0 && flatMissingSuffix.length > 0) {
+    problems.push(`平铺时远端工作区标题缺少「· 主机名」后缀：${flatMissingSuffix.map((row) => row.text).join('、')}`)
+  }
   await page.screenshot({ path: path.join(OUT, 'ui-9-grouping-off.png') })
 
-  // 9c 设置页 → 远程工作区 → 打开「按主机分组」
+  // 9c 切回「按工作区树」：主机行回来（设置的投影只在这个分组方式下成立）
+  await openViewOptions()
+  await clickViewOption('按工作区树')
+  await sleep(2600)
+  const regrouped = await page.evaluate(() => ({
+    flag: localStorage.getItem('dsh-peerbar.hostGroups.v2'),
+    hostRows: [...document.querySelectorAll('[data-row-key^="workspace:"]')]
+      .filter((row) => (row.getAttribute('data-row-key') ?? '').endsWith(':hostroot'))
+      .map((row) => (row.innerText ?? '').replace(/\s+/g, ' ').trim()),
+  }))
+  first.groupingOn = regrouped
+  if (regrouped.flag !== '1') problems.push(`切回「按工作区树」后分组标记没有恢复（flag=${regrouped.flag}）`)
+  if (regrouped.hostRows.length !== hostNames.length + 1) {
+    problems.push(`切回分组后主机行应为 ${hostNames.length + 1} 行，实际 ${regrouped.hostRows.length}`)
+  }
+
+  // 9d 设置页「远程主机」：没有侧栏块、没有排序按钮，「添加」开登记窗口
   await page.evaluate(() => {
     ;[...document.querySelectorAll('button[aria-label]')]
       .find((node) => node.getAttribute('aria-label') === '账号菜单')
@@ -1087,34 +1173,79 @@ try {
   await sleep(1200)
   await page.evaluate(() => {
     ;[...document.querySelectorAll('button, [role="menuitem"], div')]
-      .find((node) => (node.innerText ?? '').trim() === '远程工作区' && node.offsetParent !== null)
+      .find((node) => (node.innerText ?? '').trim() === '远程主机' && node.offsetParent !== null)
       ?.click()
   })
   await sleep(900)
-  const toggled = await page.evaluate(() => {
-    const label = [...document.querySelectorAll('label')].find((node) => (node.innerText ?? '').includes('按主机分组'))
-    const box = label?.querySelector('input[type="checkbox"]')
-    if (!box) return false
-    if (!box.checked) box.click()
+  const settingsPage = await page.evaluate(() => {
+    const panel = document.querySelector('.dshp-set')
+    if (!panel) return null
+    const text = panel.innerText ?? ''
+    return {
+      title: (panel.querySelector('.dshp-set-title')?.innerText ?? '').trim(),
+      text: text.replace(/\s+/g, ' ').trim().slice(0, 600),
+      hosts: [...panel.querySelectorAll('.dshp-host')].map((card) => ({
+        name: card.querySelector('.dshp-host-name')?.innerText?.trim() ?? null,
+        origin: card.querySelector('.dshp-host-origin')?.innerText?.trim() ?? null,
+        status: card.querySelector('.dshp-host-badge')?.innerText?.trim() ?? null,
+        buttons: [...card.querySelectorAll('.dshp-host-actions button')].map((node) => (node.innerText ?? '').trim()),
+      })),
+      // 旧版的侧栏块与排序按钮必须绝迹
+      hasSidebarHeading: text.includes('侧栏') || text.includes('按主机分组') || text.includes('收起全部远端工作区'),
+      hasMoveButtons: [...panel.querySelectorAll('button')].some((node) => /^[↑↓]$/.test((node.innerText ?? '').trim())),
+      addButtons: [...panel.querySelectorAll('button')].filter((node) => (node.innerText ?? '').trim() === '添加').length,
+      flag: localStorage.getItem('dsh-peerbar.hostGroups.v2'),
+    }
+  })
+  first.settingsPage = settingsPage
+  if (!settingsPage) {
+    problems.push('设置页找不到「远程主机」内容（.dshp-set 未渲染）')
+  } else {
+    if (settingsPage.hasSidebarHeading) problems.push('设置页仍出现「侧栏 / 按主机分组 / 收起全部远端工作区」字样（应整体移除）')
+    if (settingsPage.hasMoveButtons) problems.push('设置页主机卡片仍有「上移/下移」按钮（应移除）')
+    if (settingsPage.addButtons !== 1) problems.push(`设置页「添加」按钮应只有 1 个，实际 ${settingsPage.addButtons}`)
+    if (settingsPage.hosts.length !== hostNames.length) {
+      problems.push(`设置页应列出 ${hostNames.length} 台主机，实际 ${settingsPage.hosts.length}`)
+    }
+    for (const card of settingsPage.hosts) {
+      for (const label of ['刷新', '令牌', '删除']) {
+        if (!card.buttons.includes(label)) problems.push(`主机卡片「${card.name}」缺少按钮「${label}」（${card.buttons.join('/')}）`)
+      }
+    }
+  }
+  await page.screenshot({ path: path.join(OUT, 'ui-10-settings.png') })
+
+  // 「添加」→ 登记窗口（只验证表单出现，不真的登记，避免污染注册表）
+  const addHostClick = await page.evaluate(() => {
+    const button = [...document.querySelectorAll('.dshp-set button')].find((node) => (node.innerText ?? '').trim() === '添加')
+    if (!button) return false
+    button.click()
     return true
   })
-  if (!toggled) problems.push('设置页找不到「按主机分组」开关')
-  await sleep(2200)
-  await page.screenshot({ path: path.join(OUT, 'ui-10-grouping-on.png') })
-  const regrouped = await page.evaluate((names) => {
-    const rows = [...document.querySelectorAll('[data-row-key^="workspace:"]')].map((row) =>
-      (row.innerText ?? '').replace(/\s+/g, ' ').trim(),
-    )
+  await sleep(800)
+  const addHostForm = await page.evaluate(() => {
+    const form = document.querySelector('.dshp-form')
+    if (!form) return null
+    const scope = form.closest('[role="dialog"]') ?? document
     return {
-      flag: localStorage.getItem('dsh-peerbar.hostGroups'),
-      hostRows: rows.filter((text) => ['本机', ...names].includes(text)),
+      fields: [...form.querySelectorAll('.dshp-field > label')].map((node) => (node.innerText ?? '').trim()),
+      inputs: form.querySelectorAll('input').length,
+      footer: [...scope.querySelectorAll('button')].map((node) => (node.innerText ?? '').trim()).slice(0, 8),
+      // 页面主体不应该还留着旧的内联表单
+      inlineFormVisible: Boolean(document.querySelector('.dshp-set > form')),
     }
-  }, hostNames)
-  first.groupingOn = regrouped
-  if (regrouped.flag !== '1') problems.push(`设置页打开分组后开关没生效（flag=${regrouped.flag}）`)
-  if (regrouped.hostRows.length !== hostNames.length + 1) {
-    problems.push(`设置页打开分组后主机行应为 ${hostNames.length + 1} 行，实际 ${regrouped.hostRows.length}`)
+  })
+  first.settingsAddDialog = { opened: addHostClick, form: addHostForm }
+  if (!addHostClick) problems.push('设置页点「添加」没有反应')
+  if (!addHostForm) problems.push('「添加」之后没有弹出登记窗口（.dshp-form 未出现）')
+  else {
+    if (addHostForm.fields.join('/') !== '名称/地址/访问令牌') {
+      problems.push(`登记窗口字段应为 名称/地址/访问令牌，实际 ${addHostForm.fields.join('/')}`)
+    }
+    if (!addHostForm.footer.includes('添加')) problems.push(`登记窗口底部没有「添加」按钮（${addHostForm.footer.join('/')}）`)
+    if (addHostForm.inlineFormVisible) problems.push('设置页仍保留内联的「添加」表单块')
   }
+  await page.screenshot({ path: path.join(OUT, 'ui-10b-add-host.png') })
   await page.keyboard.press('Escape')
   await sleep(600)
 
@@ -1136,6 +1267,7 @@ try {
           candidates.push({
             hostId: host.hostId,
             hostName: host.name,
+            workspaceId: workspace.id ?? '',
             workspaceTitle: workspace.name ?? '',
             sessionId: session.rawId,
           })
@@ -1201,20 +1333,23 @@ try {
     if (summaryProbe.status !== 200) {
       first.changesCard = { skipped: `远端摘要已不可读（HTTP ${summaryProbe.status}）` }
     } else {
-      // 展开 owning Host 与工作区，再点中那条会话
-      await page.evaluate((fixture) => {
-        for (const row of document.querySelectorAll('.koUx-W_projectRow')) {
-          if (row.innerText.trim() === fixture.hostName && row.getAttribute('aria-expanded') !== 'true') row.click()
-        }
-      }, changesFixture)
-      await sleep(700)
-      await page.evaluate((fixture) => {
-        for (const row of document.querySelectorAll('.koUx-W_projectRow')) {
-          const text = (row.innerText ?? '').replace(/\s+/g, ' ').trim()
-          if (text === `${fixture.workspaceTitle} · ${fixture.hostName}` && row.getAttribute('aria-expanded') !== 'true') row.click()
-        }
-      }, changesFixture)
-      await sleep(900)
+      // 展开 owning Host 与工作区（行 key 是投影出来的虚拟 id），再点中那条会话
+      const expandRow = async (rowKey) => {
+        const clicked = await page.evaluate((key) => {
+          const row = document.querySelector(`[data-row-key="${CSS.escape(key)}"]`)
+          if (!row) return false
+          if (row.getAttribute('aria-expanded') !== 'true') row.click()
+          return true
+        }, rowKey)
+        await sleep(700)
+        return clicked
+      }
+      const hostRowKey = `workspace:peerbar:${changesFixture.hostId}:hostroot`
+      if (!(await expandRow(hostRowKey))) problems.push('§10 找不到 owning Host 的主机行（无法展开工作区）')
+      if (!(await expandRow(`workspace:${changesFixture.workspaceId}`))) {
+        problems.push('§10 找不到该会话所在的工作区行（无法展开会话）')
+      }
+      await sleep(200)
       const clicked = await page.evaluate(
         (id) => {
           const row = document.querySelector(`[data-row-key="session:${id}"]`)
@@ -1286,7 +1421,7 @@ try {
   // ---- 收尾 ----
   const knownWarnings = consoleErrors.filter((text) => KNOWN_NOISE.some((pattern) => pattern.test(text)))
   const realErrors = consoleErrors.filter((text) => !knownWarnings.includes(text))
-  const result = { base, mode: QUICK ? 'quick' : 'full', ...first, consoleErrors: realErrors, knownWarnings }
+  const result = { base, mode: QUICK ? 'quick' : 'full', ...first, apiErrors, consoleErrors: realErrors, knownWarnings }
   fs.writeFileSync(path.join(OUT, 'ui-check.json'), JSON.stringify(result, null, 2))
   console.log(JSON.stringify(result, null, 2))
   if (realErrors.length) problems.push(`页面报错 ${realErrors.length} 条`)

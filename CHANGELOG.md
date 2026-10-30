@@ -4,17 +4,18 @@
 
 ## 1.2.0 — 远程工作区管理优化（2026-10-29）
 
-- **侧栏主机分组（默认开）**：顶层变成可折叠的「本机 / nv50 / m50」，展开是各自的
+- **侧栏主机分组**：顶层变成可折叠的「本机 / nv50 / m50」，展开是各自的
   工作区。做法仍是官方渲染：投影时给远端路径加 `主机:` 前缀、每台主机注入一个合成
   父工作区（本机用 `/`），并切到官方「按工作区树」分组——**没有注册
   `sidebar.workspaces`，没有自绘节点**。主机行的建会话/改名/删除被拦下并提示；
-  用户在视图选项里切回「按工作区」时开关自动关、退回平铺；设置页可手动开关
+  用户在视图选项里切回「按工作区」时分组自动退场（标记 `dsh-peerbar.hostGroups.v2`
+  写 `0`）、退回平铺，切回来再恢复；分组没有开关（设置页那块已删）
 - **远端注册时间透传**：`/state` 的工作区带上远端 `createdAt`，悬停卡片不再显示 1970
 - **远端工作区组默认收起**：官方侧栏的分组默认就是收起的，但用户展开过的组会被官方
   记住（`dsh.workspace.view.v5`）。插件用 `ctx.uiWorkspace.view.setGroupExpanded`
   + 本地账本 `dsh-peerbar.collapsedRemote.v1` 做到：新出现的远端组收一次；升级后
   **第一次**加载把已有远端组也收一次（一次性迁移标记 `.migrated.v1`），之后完全以
-  官方记住的展开状态为准。设置页新增「收起全部远端工作区」按钮
+  官方记住的展开状态为准。
 - **「添加工作区」支持远端目录**：接管官方 single 座位
   `sidebar.workspaces.directoryFlow` 与 `conversation.hero.workspace.directoryFlow`，
   对话框顶部可选「本机 / nv50 / m50」；远端经只读 `directoryPicker/list` 浏览、
@@ -39,13 +40,22 @@
   注册工作区 → 侧栏出现 `tmp · nv50` → `workspace/delete` 清掉）、§10（找一条带
   `workspace/changes` 的远端会话 → 卡片出现 → 摘要走 `/api/asset` 转发且没有直连 404；
   远端进程重启后摘要消失时记 skipped）
+- **侧栏外观（2026-10-30 验收反馈）**：主机行的图标从「文件夹」换成专属图标
+  （本机显示器、远端云，纯 CSS mask 挂在官方 row 的 `data-row-key` 上，不动行结构）；
+  远端工作区标题去掉「· 主机名」后缀——来源已经由主机行表达，只在平铺时补回后缀
+- **设置页重做（2026-10-30 验收反馈）**：整页只剩一列「远程主机」——标题 + 添加按钮 +
+  每台主机一张卡（状态点/地址/状态徽标，启用、凭据、刷新、令牌、删除）。删掉说明
+  段落、整个「侧栏」块（含「按主机分组」开关与「收起全部远端工作区」）、主机卡片上的
+  「上移/下移」，以及页底那块内联的「添加」表单；「添加」改为弹窗（Modal，名称/地址/
+  令牌/自签选项），「立即探活」→「刷新」、「改令牌」→「令牌」
 - **适配 dsh 0.2.2-alpha.2**：桌面运行时 2026-10-30 升级后，官方计划页签改读
   `session/events`（0.2.1 叫 `session/page`，远端还没有新端点）。客户端半把
   `session/events` 翻译成远端的 `session/page`（补 `throughSeq`、补回 `cursor`），
   远端会话的计划预览恢复
 - **验证**：`node --check` 通过；`node --test` 84 pass；`node scripts/ui-check.mjs` 全绿
-  （截图 `ui-0-add-workspace.png`、`ui-0b-add-workspace-remote.png`、`ui-8-remote-workspace.png`、
-  `ui-11-changes-card.png`）；`node scripts/panel-check.mjs` 通过（远端文档预览按数据记 skipped）
+  （截图 `ui-1-sidebar.png`、`ui-0-add-workspace.png`、`ui-8-remote-workspace.png`、
+  `ui-9-grouping-off.png`、`ui-10-settings.png`、`ui-10b-add-host.png`、`ui-11-changes-card.png`）；
+  `node scripts/panel-check.mjs` 通过（远端文档预览按数据记 skipped）
 
 ## 1.1.0 — 计划预览全文 + 定时任务实时刷新（2026-10-29）
 
