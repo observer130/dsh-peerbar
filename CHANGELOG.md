@@ -2,6 +2,73 @@
 
 本项目在 0.5.0 之前没有正式发布（只能填仓库绝对路径安装），下面是按能力阶段整理的历史。
 
+## 1.2.0 — 远程工作区管理优化（2026-10-29）
+
+- **侧栏主机分组**：顶层变成可折叠的「本机 / nv50 / m50」，展开是各自的
+  工作区。做法仍是官方渲染：投影时给远端路径加 `主机:` 前缀、每台主机注入一个合成
+  父工作区（本机用 `/`），并切到官方「按工作区树」分组——**没有注册
+  `sidebar.workspaces`，没有自绘节点**。主机行的建会话/改名/删除被拦下并提示；
+  用户在视图选项里切回「按工作区」时分组自动退场（标记 `dsh-peerbar.hostGroups.v2`
+  写 `0`）、退回平铺，切回来再恢复；分组没有开关（设置页那块已删）
+- **远端注册时间透传**：`/state` 的工作区带上远端 `createdAt`，悬停卡片不再显示 1970
+- **远端工作区组默认收起**：官方侧栏的分组默认就是收起的，但用户展开过的组会被官方
+  记住（`dsh.workspace.view.v5`）。插件用 `ctx.uiWorkspace.view.setGroupExpanded`
+  + 本地账本 `dsh-peerbar.collapsedRemote.v1` 做到：新出现的远端组收一次；升级后
+  **第一次**加载把已有远端组也收一次（一次性迁移标记 `.migrated.v1`），之后完全以
+  官方记住的展开状态为准。
+- **「添加工作区」支持远端目录**：接管官方 single 座位
+  `sidebar.workspaces.directoryFlow` 与 `conversation.hero.workspace.directoryFlow`，
+  对话框顶部可选「本机 / nv50 / m50」；远端经只读 `directoryPicker/list` 浏览、
+  `workspace/create {path}` 在远端注册，本机分支仍交回官方 `onPicked`（建工作区 +
+  开新会话）。路径框可直接编辑回车跳转；桌面端本机是 native picker 时退化为系统对话框
+- **远端会话的「已编辑 N 个文件」卡片 / review 页签**：官方 ui-deliverables 用普通
+  `fetch` 读 `/api/changes.summary|diff`（按会话寻址），摘要只存在记录它的 Host 进程里，
+  联邦视图里本机路由只能 404，卡片整块不出现（验收反馈：比远端原生 web 少一块）。
+  官方 `connection.fetch.register` 同路径直接抛错、无法覆盖，所以宿主半新增
+  `GET /dsh-peerbar/api/asset`（白名单两条 pathname，带该 Host cookie 转发、401 就地换
+  cookie 重试、只回传 content-type 与远端状态），客户端半把这两条请求按会话归属改写到
+  转发路由。卡片、逐文件对比、review 页签与原生的渲染一致；`present.open|changes.open`
+  （在主机应用里打开）仍不转发
+- **消息反馈（👍/👎）跟着远端走**：0.2.2 的反馈状态来自 Remote 名字空间
+  `messageFeedback`（`list/put/delete`，参数按会话）。不转发时本机拿远端会话 id 去读，
+  回复下方显示「反馈状态加载失败」；现在按会话归属改投 `messageFeedback/*`（读是常态，
+  写只在亲手点评分/删除时发生），进 RPC 白名单
+- **上游提案**：`docs/上游提案-侧栏分组座位.md` 说明为什么「本机/nv50/m50」分组行
+  需要官方新增座位（list 分组头或 `WorkspaceView.section`），以及两种增量 API 建议
+- **自检**：`ui-check` 新增 §1b（加载后远端组必须全收起）、§9（展开→清标记→重载→
+  又被收起的迁移验证）、§1c（对话框有主机标签且能列远端目录）、§8（在 nv50 的 `/tmp`
+  注册工作区 → 侧栏出现 `tmp · nv50` → `workspace/delete` 清掉）、§10（找一条带
+  `workspace/changes` 的远端会话 → 卡片出现 → 摘要走 `/api/asset` 转发且没有直连 404；
+  远端进程重启后摘要消失时记 skipped）
+- **侧栏外观（2026-10-30 验收反馈）**：主机行的图标从「文件夹」换成专属图标
+  （本机显示器、远端云，纯 CSS mask 挂在官方 row 的 `data-row-key` 上，不动行结构）；
+  远端工作区标题去掉「· 主机名」后缀——来源已经由主机行表达，只在平铺时补回后缀
+- **设置页重做（2026-10-30 验收反馈）**：整页只剩一列「远程主机」——标题 + 每台主机
+  一张卡（状态点/地址/状态徽标，启用、凭据、刷新、令牌、删除）+ 卡片下方左对齐的
+  「添加」。删掉说明段落、整个「侧栏」块（含「按主机分组」开关与「收起全部远端工作区」）、
+  主机卡片上的「上移/下移」、页底内联的「添加」表单，以及 build 号页脚；「添加」改为
+  弹窗（Modal，名称/地址/令牌/自签选项），「立即探活」→「刷新」、「改令牌」→「令牌」。
+  设置导航里这一项原本是齿轮（官方 `navIcon` 只给内置 id 配图标、注册项没有 icon 字段），
+  插件按文案给导航按钮打 `data-peerbar-section` 标记，再用 CSS mask 换成云图标
+- **「停止」按钮修好（2026-10-30 验收反馈）**：远端会话里点右下角的停止毫无反应，
+  而在远端自己的 web 里同一条会话能立刻停。根因不在写代理，而在会话作用域：官方
+  `conversation.cancel()` 先 `sessions.scopeOf(this.ctx)` 解析会话 id，远端 binding 的
+  `ctx` 是插件根上下文、没有会话作用域，这句抛 `requires a session scope`，又被官方
+  `stop(sessionId)` 的 `.catch(() => {})` 吞掉——请求一个都没发出去。现在每个远端
+  binding 带一个作用域上下文（`scope(id)` 返回它，`scopeOf`/`sessionOf` 认它的
+  `__pbScope` 标记），停止、队列项编辑、`conversation.send` 都走通；顺带修了「打开
+  已经在跑的会话」时 `running` 初值恒 false（官方会把停止渲染成不可点的「发送」）
+- **适配 dsh 0.2.2-alpha.2**：桌面运行时 2026-10-30 升级后，官方计划页签改读
+  `session/events`（0.2.1 叫 `session/page`，远端还没有新端点）。客户端半把
+  `session/events` 翻译成远端的 `session/page`（补 `throughSeq`、补回 `cursor`），
+  远端会话的计划预览恢复
+- **验证**：`node --check` 通过；`node --test` 84 pass；`node scripts/ui-check.mjs` 全绿
+  （截图 `ui-1-sidebar.png`、`ui-0-add-workspace.png`、`ui-8-remote-workspace.png`、
+  `ui-9-grouping-off.png`、`ui-10-settings.png`、`ui-10b-add-host.png`、`ui-11-changes-card.png`、
+  `ui-5b-remote-stopped.png`）；§5 新增停止回归：发一条跑一分钟的 bash 任务 → 点停止 →
+  必须真的发出 `session/cancel`（200）且远端 `running` 归零；
+  `node scripts/panel-check.mjs` 通过（远端文档预览按数据记 skipped）
+
 ## 1.1.0 — 计划预览全文 + 定时任务实时刷新（2026-10-29）
 
 接上联邦路线剩下的两条真实缺口。

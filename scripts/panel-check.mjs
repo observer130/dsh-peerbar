@@ -76,13 +76,16 @@ try {
     }
     return found
   })
-  // 展开所有远端组（组名以「 · 主机名」结尾）
-  await page.evaluate(() => {
-    for (const row of document.querySelectorAll('[data-row-key^="workspace:"]')) {
-      if (row.getAttribute('aria-expanded') !== 'true') row.click()
-    }
-  })
-  await new Promise((resolve) => setTimeout(resolve, 1200))
+  // 展开所有工作区组。主机分组开着时是两层：先展开主机行，子工作区行才出现，
+  // 所以要跑几趟（每趟只点当前 DOM 里的折叠行）。
+  for (let pass = 0; pass < 3; pass += 1) {
+    await page.evaluate(() => {
+      for (const row of document.querySelectorAll('[data-row-key^="workspace:"]')) {
+        if (row.getAttribute('aria-expanded') !== 'true') row.click()
+      }
+    })
+    await new Promise((resolve) => setTimeout(resolve, 900))
+  }
 
   const statFile = (entry, file) =>
     page
@@ -163,7 +166,9 @@ try {
       const text = document.body.innerText ?? ''
       return { tabs, tail: text.slice(-600) }
     })
-    const opened = preview.tabs.some((tab) => tab.includes(readable))
+    // 预览页签的标题是文件名（不带目录），正文里的引用可能带 `docs/` 前缀。
+    const base = readable.split('/').pop()
+    const opened = preview.tabs.some((tab) => tab.includes(base))
     const failed = /无法读取|读取失败|不存在|EISDIR|permission denied/i.test(preview.tail.slice(-260))
     result.preview = {
       title: entry.title,
@@ -207,11 +212,22 @@ try {
         .find((button) => button.getAttribute('aria-label') === '自动化任务')?.click()
     })
     await new Promise((resolve) => setTimeout(resolve, 2500))
+    // dsh 0.2.2 的「自动化任务」页默认只看「已开启」，夹具里的任务早已投递完
+    // （status=inactive），不点「全部」是看不到的——这不是插件的数据问题。
+    const filter = await page.evaluate(() => {
+      const all = [...document.querySelectorAll('button, [role="tab"], [role="radio"]')].find(
+        (node) => (node.textContent ?? '').trim() === '全部',
+      )
+      if (!all) return 'none'
+      all.click()
+      return 'all'
+    })
+    await new Promise((resolve) => setTimeout(resolve, 1200))
     const listed = await page.evaluate((titles) => {
       const text = document.body.innerText ?? ''
       return titles.filter((title) => text.includes(title))
     }, tasks.tasks.slice(0, 3))
-    result.schedule = { total: tasks.tasks.length, listed }
+    result.schedule = { total: tasks.tasks.length, filter, listed }
     if (listed.length === 0) problems.push('「自动化任务」页没有列出远端任务')
   }
 

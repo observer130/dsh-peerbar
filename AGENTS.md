@@ -6,8 +6,14 @@
 
 - **是什么**：一个 DeepSeek Harness（dsh）插件，**聚合多个 dsh 前端**：在官方侧栏那一列里列出本机 + 多台远端（nv50 / m50）的工作区与会话，点远端会话由官方中栏渲染、执行留在远端。需求以 `docs/意图.md` 为准（冻结），实现见 `docs/架构.md`。
 - **技术栈**：纯 JavaScript ESM，**无构建步骤**，目标零第三方依赖。宿主半跑在 Node，客户端半是浏览器 `__ModuleLoader__` bundle。
-- **目标宿主**：dsh `0.2.1-rc.2` / `rc.3`（两者都实测通过），profile `~/.dsh/profiles/desktop`。
-- **当前阶段**：`master` = 1.0.0 **原生会话联邦**。不注册 `sidebar.workspaces`，把远端工作区/会话投影进官方 store，官方侧栏/中栏/右侧栏原样渲染；控制流（`session/control`）、转发事件（`$events`）、会话历史流（`session/follow`）三条桥都已接上。剩余 P1 与边界见 `docs/现状与计划.md` §3，别再把它当功能缺口重复做。
+- **目标宿主**：桌面运行时 `0.2.2-alpha.2`（2026-10-30 升级，本机实测通过）；远端 Host 仍是
+  `0.2.1-rc.x`（没有 `session/events`，插件把它翻译成 `session/page`）。profile `~/.dsh/profiles/desktop`。
+- **当前阶段**：`master` = 1.1.0；功能分支 `feat/remote-workspace-ux` = 1.2.0（等验收）。路线仍是**原生会话联邦**：不注册 `sidebar.workspaces`，把远端数据投影进官方 store，官方三栏原样渲染；`session/control`、`$events`、`session/follow` 三条桥已接上。1.2.0 三件事：①侧栏**主机分组**（本机/nv50/m50 可折叠）——用官方「按工作区树」+ 投影出来的合成父工作区（远端 `path: "nv50:/..."`、本机 `/`），不注册座位；分组是默认形态、没有开关，用户切走分组方式时自动退场、退回平铺；主机行图标靠 CSS mask 换（本机显示器 / 远端云），工作区标题分组时不带主机后缀；**别再为这个功能去自绘树**。②远端工作区组默认收起（`setGroupExpanded` + 本地账本 + 一次性迁移）。③接管官方 `sidebar.workspaces.directoryFlow` / `conversation.hero.workspace.directoryFlow`，「添加工作区」可先选主机、在远端 `workspace/create`。另有两件适配/补齐：④远端会话的「已编辑 N 个文件」卡片与 review 页签——官方按会话读
+  `/api/changes.summary|diff`，本机没有远端摘要，宿主半用 `GET /dsh-peerbar/api/asset`
+  转发（白名单两条路径），客户端半在 `window.fetch` 上按会话归属改写；官方
+  `connection.fetch.register` 同路径会抛错，**别再试图覆盖官方路由**。⑤0.2.2 的计划页签
+  改读 `session/events`，远端 0.2.1 只有 `session/page`，客户端半负责翻译
+  （补 `throughSeq`、补回 `cursor`）。剩余 P1 与边界见 `docs/现状与计划.md` §3。
 - **两半结构**：`lib/index.js` 宿主半（注册路由、探活、拉取远端快照、缓存）；`lib/client.js` 客户端半（投影进官方 store、合成 SessionBinding、`settings.section`）。两半之间只通过同源 HTTP/WS 通信。
 
 ## 架构不变量
@@ -28,7 +34,7 @@
 
 | 项 | 值 |
 | --- | --- |
-| 宿主 | DSH Desktop `dsh-desktop-linux-bin 0.2.1rc.3-1`（本机唯一安装） |
+| 宿主 | DSH Desktop `@deepseek-ai/dsh-desktop 0.2.2-alpha.2`（2026-10-30 升级；本机唯一安装）；远端 Host 仍是 0.2.1-rc.x |
 | 自带运行时 | `/opt/dsh-desktop-linux-bin/resources/runtime` — Node 24.21.0 / pnpm 11.28.5 |
 | profile | `~/.dsh/profiles/desktop`，**由 Electron 独占**，CLI 无法管理 |
 | 限制 | agent shell 有 `ulimit -v 4GB`，不要从里面直接起 dsh 进程 |
@@ -72,6 +78,7 @@ lib/index.js     宿主半入口：config 校验、路由装配、生命周期
 lib/config.js    注册表与缓存读写（0600、原子替换）
 lib/guard.js     回环 + 同源栅栏（P0-5 的地基）
 lib/identity.js  origin 归一化、hostId、虚拟 ID、cwd → 工作区
+lib/assets.js    远端会话级只读路由白名单（交付物卡片的 changes.summary / changes.diff）
 lib/remote.js    令牌换 cookie、RPC 信封、session/list、分页、错误分类
 lib/rpc.js       远端 RPC 白名单（/hosts/<id>/rpc 只放行这张表）
 lib/stream.js    Remote 流通道：workspace/follow 归档集、workspaceFiles/changes（SSE）、
@@ -84,7 +91,7 @@ lib/peers.js     每 Host 的快照编排、调度与缓存
 lib/codes.js     错误码，前后端共用
 lib/client.js    客户端半：官方 store 投影 + 联邦写操作代理 + 远端会话 binding + settings.section
 test/            node:test 单测
-docs/            意图.md / 架构.md / 现状与计划.md（现行）；插件规范、官方侧栏规格、终端设计；archive/ 旧文档
+docs/            意图.md / 架构.md / 现状与计划.md（现行）；插件规范、官方侧栏规格、上游提案、终端设计；archive/ 旧文档
 ```
 
 新增文件前先想归属；`lib/index.js` 只做装配，不堆业务。
