@@ -599,6 +599,73 @@ try {
         await sleep(4000)
         await page.screenshot({ path: path.join(OUT, 'ui-5-remote-prompt.png') })
 
+        // 停止按钮：官方 `conversation.cancel()` 先 `sessions.scopeOf(this.ctx)` 解析
+        // 会话作用域，再 `binding(id).session.cancel()`。远端 binding 没有作用域时这句
+        // 抛错，而官方 `stop(sessionId)` 把它 `.catch(() => {})` 吞掉——表现是「点停止
+        // 毫无反应，一个请求都不发」。这里发一条要跑一分钟的 bash 任务，点停止，
+        // 要求真的发出 session/cancel 且远端 running 归零。
+        const stopTurn = await page.evaluate(() => {
+          const box = document.querySelector('textarea, [contenteditable="true"]')
+          if (!box) return false
+          box.focus()
+          return true
+        })
+        if (stopTurn) {
+          await page.keyboard.type('请用 bash 工具执行一条命令：for i in $(seq 1 60); do echo $i; sleep 1; done')
+          await page.keyboard.press('Enter')
+        }
+        const stopButton = stopTurn
+          ? await until(
+              '远端运行中出现「停止」按钮',
+              () =>
+                page.evaluate(() => {
+                  const button = [...document.querySelectorAll('button')].find((node) =>
+                    (node.getAttribute('aria-label') ?? '').includes('停止'),
+                  )
+                  return button && !button.disabled ? button.getAttribute('aria-label') : null
+                }),
+              45000,
+            ).catch(() => null)
+          : null
+        first.stopButton = stopButton
+        if (stopButton) {
+          await page.evaluate(() => {
+            const button = [...document.querySelectorAll('button')].find((node) =>
+              (node.getAttribute('aria-label') ?? '').includes('停止'),
+            )
+            button?.click()
+          })
+          const cancelCall = await until(
+            '点停止后发出 session/cancel',
+            () => rpcCalls.some((call) => call.endpoint === 'session/cancel' && call.status < 400),
+            15000,
+          ).catch(() => false)
+          first.stopCancelCall = Boolean(cancelCall)
+          if (!cancelCall) {
+            problems.push(`点「停止」后没有发出 session/cancel（RPC 记录：${JSON.stringify(rpcCalls.slice(-4))}）`)
+          }
+          // 停止后远端 running 必须归零（/state 是宿主半的权威快照）
+          const stopped = await until(
+            '停止后远端 running 归零',
+            () =>
+              page.evaluate(async (hostId) => {
+                const payload = await fetch('/dsh-peerbar/api/state', { credentials: 'same-origin' }).then((response) => response.json())
+                const host = (payload?.hosts ?? []).find((item) => item.hostId === hostId)
+                for (const workspace of host?.workspaces ?? []) {
+                  for (const session of workspace.sessions ?? []) {
+                    if (session.running === true) return false
+                  }
+                }
+                return true
+              }, /^workspace:peerbar:([^:]+):ws:/.exec(firstRemoteKey)?.[1] ?? ''),
+            20000,
+          ).catch(() => false)
+          first.stopSettled = Boolean(stopped)
+          if (!stopped) problems.push('点「停止」后远端仍有会话处于 running')
+          await sleep(600)
+          await page.screenshot({ path: path.join(OUT, 'ui-5b-remote-stopped.png') })
+        }
+
         // 清理：归档这次测试会话（远端），别在列表里堆空白会话
         if (created) {
           const cleanup = await page.evaluate(

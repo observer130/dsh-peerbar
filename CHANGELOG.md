@@ -50,13 +50,23 @@
   弹窗（Modal，名称/地址/令牌/自签选项），「立即探活」→「刷新」、「改令牌」→「令牌」。
   设置导航里这一项原本是齿轮（官方 `navIcon` 只给内置 id 配图标、注册项没有 icon 字段），
   插件按文案给导航按钮打 `data-peerbar-section` 标记，再用 CSS mask 换成云图标
+- **「停止」按钮修好（2026-10-30 验收反馈）**：远端会话里点右下角的停止毫无反应，
+  而在远端自己的 web 里同一条会话能立刻停。根因不在写代理，而在会话作用域：官方
+  `conversation.cancel()` 先 `sessions.scopeOf(this.ctx)` 解析会话 id，远端 binding 的
+  `ctx` 是插件根上下文、没有会话作用域，这句抛 `requires a session scope`，又被官方
+  `stop(sessionId)` 的 `.catch(() => {})` 吞掉——请求一个都没发出去。现在每个远端
+  binding 带一个作用域上下文（`scope(id)` 返回它，`scopeOf`/`sessionOf` 认它的
+  `__pbScope` 标记），停止、队列项编辑、`conversation.send` 都走通；顺带修了「打开
+  已经在跑的会话」时 `running` 初值恒 false（官方会把停止渲染成不可点的「发送」）
 - **适配 dsh 0.2.2-alpha.2**：桌面运行时 2026-10-30 升级后，官方计划页签改读
   `session/events`（0.2.1 叫 `session/page`，远端还没有新端点）。客户端半把
   `session/events` 翻译成远端的 `session/page`（补 `throughSeq`、补回 `cursor`），
   远端会话的计划预览恢复
 - **验证**：`node --check` 通过；`node --test` 84 pass；`node scripts/ui-check.mjs` 全绿
   （截图 `ui-1-sidebar.png`、`ui-0-add-workspace.png`、`ui-8-remote-workspace.png`、
-  `ui-9-grouping-off.png`、`ui-10-settings.png`、`ui-10b-add-host.png`、`ui-11-changes-card.png`）；
+  `ui-9-grouping-off.png`、`ui-10-settings.png`、`ui-10b-add-host.png`、`ui-11-changes-card.png`、
+  `ui-5b-remote-stopped.png`）；§5 新增停止回归：发一条跑一分钟的 bash 任务 → 点停止 →
+  必须真的发出 `session/cancel`（200）且远端 `running` 归零；
   `node scripts/panel-check.mjs` 通过（远端文档预览按数据记 skipped）
 
 ## 1.1.0 — 计划预览全文 + 定时任务实时刷新（2026-10-29）
