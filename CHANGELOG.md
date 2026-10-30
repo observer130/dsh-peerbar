@@ -62,6 +62,11 @@
   `session/events`（0.2.1 叫 `session/page`，远端还没有新端点）。客户端半把
   `session/events` 翻译成远端的 `session/page`（补 `throughSeq`、补回 `cursor`），
   远端会话的计划预览恢复
+- **安装**：插件页的「添加插件」可以直接填 GitHub 仓库地址
+  `https://github.com/observer130/dsh-peerbar`。本插件零构建、`lib/` 入库，
+  安装器按 commit 取 tarball 即可加载，不需要 `prepare`，也不需要用户在
+  `pnpm-workspace.yaml` 里给 `allowBuilds` 授权。已用官方插件页实测：安装 → 启用 →
+  宿主路由 200、客户端半生效
 - **验证**：`node --check` 通过；`node --test` 84 pass；`node scripts/ui-check.mjs` 全绿
   （截图 `ui-1-sidebar.png`、`ui-0-add-workspace.png`、`ui-8-remote-workspace.png`、
   `ui-9-grouping-off.png`、`ui-10-settings.png`、`ui-10b-add-host.png`、`ui-11-changes-card.png`、

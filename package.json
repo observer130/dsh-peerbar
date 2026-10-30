@@ -2,6 +2,14 @@
   "name": "dsh-peerbar",
   "version": "1.2.0",
   "description": "把多台 dsh 聚合成一个前端：本机与各远端的工作区/会话混排在官方侧栏，点远端会话由官方中栏渲染、执行留在远端",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/observer130/dsh-peerbar.git"
+  },
+  "homepage": "https://github.com/observer130/dsh-peerbar#readme",
+  "bugs": {
+    "url": "https://github.com/observer130/dsh-peerbar/issues"
+  },
   "type": "module",
   "main": "lib/index.js",
   "exports": {
