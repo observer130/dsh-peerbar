@@ -1194,6 +1194,28 @@ try {
       hasSidebarHeading: text.includes('侧栏') || text.includes('按主机分组') || text.includes('收起全部远端工作区'),
       hasMoveButtons: [...panel.querySelectorAll('button')].some((node) => /^[↑↓]$/.test((node.innerText ?? '').trim())),
       addButtons: [...panel.querySelectorAll('button')].filter((node) => (node.innerText ?? '').trim() === '添加').length,
+      // build 号页脚已移除；「添加」跟最后一张卡片的下方、左边缘对齐
+      hasBuildText: /build\s+\d{4}-/.test(text),
+      addBelowCards: (() => {
+        const add = [...panel.querySelectorAll('button')].find((node) => (node.innerText ?? '').trim() === '添加')
+        const cards = [...panel.querySelectorAll('.dshp-host')]
+        if (!add || cards.length === 0) return null
+        const last = cards.at(-1).getBoundingClientRect()
+        const rect = add.getBoundingClientRect()
+        return { below: rect.top >= last.bottom, alignedLeft: Math.abs(rect.left - cards[0].getBoundingClientRect().left) <= 1 }
+      })(),
+      // 设置导航里我们那条：官方给的是齿轮，插件换成云（打标记 + CSS mask）
+      navIcon: (() => {
+        const button = document.querySelector('[data-peerbar-section="peers"]')
+        if (!button) return null
+        const svg = button.querySelector('svg')
+        const before = getComputedStyle(button, '::before')
+        return {
+          label: (button.innerText ?? '').trim(),
+          gearHidden: svg ? getComputedStyle(svg).display === 'none' : null,
+          mask: (before.maskImage || before.webkitMaskImage || '').includes('svg'),
+        }
+      })(),
       flag: localStorage.getItem('dsh-peerbar.hostGroups.v2'),
     }
   })
@@ -1204,6 +1226,18 @@ try {
     if (settingsPage.hasSidebarHeading) problems.push('设置页仍出现「侧栏 / 按主机分组 / 收起全部远端工作区」字样（应整体移除）')
     if (settingsPage.hasMoveButtons) problems.push('设置页主机卡片仍有「上移/下移」按钮（应移除）')
     if (settingsPage.addButtons !== 1) problems.push(`设置页「添加」按钮应只有 1 个，实际 ${settingsPage.addButtons}`)
+    if (settingsPage.hasBuildText) problems.push('设置页仍显示 build 号（应移除）')
+    if (settingsPage.addBelowCards && !settingsPage.addBelowCards.below) {
+      problems.push('「添加」按钮没有放在卡片下方')
+    }
+    if (settingsPage.addBelowCards && !settingsPage.addBelowCards.alignedLeft) {
+      problems.push('「添加」按钮没有和卡片左边缘对齐')
+    }
+    if (!settingsPage.navIcon) problems.push('设置导航里找不到「远程主机」那条（data-peerbar-section 未标记）')
+    else {
+      if (settingsPage.navIcon.gearHidden !== true) problems.push('设置导航「远程主机」仍是齿轮图标（官方 svg 没有被隐藏）')
+      if (!settingsPage.navIcon.mask) problems.push('设置导航「远程主机」没有换成云图标（::before 的 mask 缺失）')
+    }
     if (settingsPage.hosts.length !== hostNames.length) {
       problems.push(`设置页应列出 ${hostNames.length} 台主机，实际 ${settingsPage.hosts.length}`)
     }
