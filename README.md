@@ -24,44 +24,22 @@
 1. 打开 DSH Desktop → 侧栏 **插件** → 右上 **添加插件**
 2. 输入仓库地址 `https://github.com/observer130/dsh-peerbar`，点 **安装**
 3. 装完点 **立即启用**（插件卡片上的开关也行）；侧栏出现「本机 / 远端主机」分组即已生效
-4. 没看到变化先刷新页面；宿主半仍未加载就重启 DSH Desktop
-
-安装器会把该仓库当前提交打成 tarball 交给 pnpm，按 `package.json` 的 `files` 取 `lib/` 和
-`cordis.patch.yml`。本插件 `lib/` 直接入库、没有构建步骤，所以**不需要 `prepare` 脚本，
-也不需要 `allowBuilds` 构建授权**——填地址、安装、启用即可。首次安装需要能访问 GitHub。
-
-- 锁定提交：`github:observer130/dsh-peerbar#<commit>`（输入框同样接受这种写法）
-- 升级：先卸载，再用同一地址安装一次（git 依赖没有「更新」按钮）
-- 本地开发仍用下面的目录方式；两种方式装的是同一个依赖名，切换时会互相替换
 
 ### 从仓库目录（开发用）
 
 1. 侧栏 **插件** → 右上 **添加插件**
-2. 填本仓库的绝对路径（如 `/home/nwj/Projects/dsh-peerbar`）
-3. 装完点 **立即启用**；改了宿主半重启 DSH Desktop，改客户端半刷新页面即可
+2. 填本仓库的绝对路径
+3. 装完点 **立即启用**
 
-### 从 tgz（离线）
+### 发布说明
 
-```sh
-npm pack                      # 产出 dsh-peerbar-<version>.tgz（含 lib/、patch、README、LICENSE，不含 docs/）
-```
-
-把 tgz 放到本机任意绝对路径，在「添加插件」里填该路径即可（本地目录和 `.tgz` 都由同一个安装器处理）；
-也可以解压后把 `package/` 放进目标 profile 的 `node_modules/dsh-peerbar`，再重启 dsh。
-
-### 发布说明（维护者）
-
-仓库根就是一个可直接安装的**组合包**：`dsh.bundle.patch` 指向 `cordis.patch.yml`，
-`dsh.client` 声明客户端半，`files` 列出产物。发布 = 推 `master`，安装器按 commit 打包，
-没有 npm 发布步骤，也不需要 `prepare`。若以后引入构建步骤，必须补 `prepare`，
-并让用户在 profile 的 `pnpm-workspace.yaml` 里用 `allowBuilds` 授权，否则装到的源码没有构建产物。
+仓库根就是一个可直接安装的**组合包**，安装器按 commit 打包。
 
 ## 使用
 
 1. **设置 → 远程工作区**，添加 Host：名称、地址（如 `https://10.0.0.10:3080`）、访问令牌
-2. 令牌就是远端 dsh 启动时 URL 里 `?token=` 后面那串；只在换 cookie 时用一次，之后 30 天内不必再填，远端重启也不用
+2. 令牌就是远端 dsh 启动时 URL 里 `?token=` 后面那串
 3. 远端用自签证书时勾上「跳过证书校验」（仅内网）
-4. 保存后自动探活；点 Host 名字可改名换色，↑↓ 调顺序，取消「启用」可临时停掉
 
 ## 注意事项
 

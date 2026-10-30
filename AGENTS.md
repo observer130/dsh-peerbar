@@ -6,25 +6,14 @@
 
 - **是什么**：一个 DeepSeek Harness（dsh）插件，**聚合多个 dsh 前端**：在官方侧栏那一列里列出本机 + 多台远端（nv50 / m50）的工作区与会话，点远端会话由官方中栏渲染、执行留在远端。需求以 `docs/意图.md` 为准（冻结），实现见 `docs/架构.md`。
 - **技术栈**：纯 JavaScript ESM，**无构建步骤**，目标零第三方依赖。宿主半跑在 Node，客户端半是浏览器 `__ModuleLoader__` bundle。
-- **目标宿主**：桌面运行时 `0.2.2-alpha.2`（2026-10-30 升级，本机实测通过）；远端 Host 仍是
-  `0.2.1-rc.x`（没有 `session/events`，插件把它翻译成 `session/page`）。profile `~/.dsh/profiles/desktop`。
-- **当前阶段**：`master` = 1.2.0（远程工作区管理优化 + 停止修复，2026-10-30 验收通过）。路线仍是**原生会话联邦**：不注册 `sidebar.workspaces`，把远端数据投影进官方 store，官方三栏原样渲染；`session/control`、`$events`、`session/follow` 三条桥已接上。1.2.0 三件事：①侧栏**主机分组**（本机/nv50/m50 可折叠）——用官方「按工作区树」+ 投影出来的合成父工作区（远端 `path: "nv50:/..."`、本机 `/`），不注册座位；分组是默认形态、没有开关，用户切走分组方式时自动退场、退回平铺；主机行图标靠 CSS mask 换（本机显示器 / 远端云），工作区标题分组时不带主机后缀；**别再为这个功能去自绘树**。②远端工作区组默认收起（`setGroupExpanded` + 本地账本 + 一次性迁移）。③接管官方 `sidebar.workspaces.directoryFlow` / `conversation.hero.workspace.directoryFlow`，「添加工作区」可先选主机、在远端 `workspace/create`。另有两件适配/补齐：④远端会话的「已编辑 N 个文件」卡片与 review 页签——官方按会话读
-  `/api/changes.summary|diff`，本机没有远端摘要，宿主半用 `GET /dsh-peerbar/api/asset`
-  转发（白名单两条路径），客户端半在 `window.fetch` 上按会话归属改写；官方
-  `connection.fetch.register` 同路径会抛错，**别再试图覆盖官方路由**。⑤0.2.2 的计划页签
-  改读 `session/events`，远端 0.2.1 只有 `session/page`，客户端半负责翻译
-  （补 `throughSeq`、补回 `cursor`）。剩余 P1 与边界见 `docs/现状与计划.md` §3。
 - **两半结构**：`lib/index.js` 宿主半（注册路由、探活、拉取远端快照、缓存）；`lib/client.js` 客户端半（投影进官方 store、合成 SessionBinding、`settings.section`）。两半之间只通过同源 HTTP/WS 通信。
 
 ## 架构不变量
 
 这几条是设计前提，不是可调偏好：
 
-- **UI 全是官方的**：不注册 `sidebar.workspaces`、不自绘树、不重写中栏。远端数据投影进
-  官方 store（`workspaces.list` / `sessions.list`），官方组件自己渲染。
-  **禁止**「侧栏图标 + 中栏整页」、iframe、右侧 dock、全屏浮层——上一版就是这么翻车的。
+- **UI 全是官方的**：不注册 `sidebar.workspaces`、不自绘树、不重写中栏。远端数据投影进官方 store（`workspaces.list` / `sessions.list`），官方组件自己渲染。
 - **本机数据不另拉一份**：本机行来自官方 store 本身，远端行只在读路径合并，避免同一会话两行。
-
 - **浏览器不直连远端**。所有跨机请求由宿主半发起（远端 cookie 是 host-only + `SameSite=Strict`，浏览器跨 origin 拿不到）。
 - **远端只提供数据，不提供 UI**。不加载远端插件 bundle，不把远端 slot 接进来。
 - **虚拟 ID 才是主键**：`peerbar:<hostId>:<kind>:<rawId>`。裸 `workspaceId`/`sessionId` 在不同 Host 间会撞。
@@ -96,7 +85,7 @@ docs/            意图.md / 架构.md / 现状与计划.md（现行）；插件
 
 新增文件前先想归属；`lib/index.js` 只做装配，不堆业务。
 
-## dsh 插件契约（最容易写错的五条）
+## dsh 插件契约
 
 完整清单见 `docs/插件开发规范.md`，这里只放会直接导致返工的部分：
 
@@ -138,26 +127,7 @@ export function apply(ctx) {
 }
 ```
 
-## Git 与合并闸门（2026-10-22 重写）
-
-**教训**：上一轮每改一两个 commit 就 `--no-ff` 合进 `master`，功能还是错的，导致 master 不可用、
-用户被迫反复验收。以下规则不可协商：
-
-1. **`master` 只接受「已验证可用」的状态**。合并 = 一次发布，不是一次提交同步。
-2. 开工先拉**长生命周期功能分支**（`feat/<feature>`），在整个功能完成前**不合回 master**，
-   中途随便 commit（`wip:` 前缀也可以）。
-3. 合回 master 前必须同时满足：
-   - `node --test test/*.test.js` 全绿；
-   - `node --check lib/*.js` 通过；
-   - **`scripts/ui-check.mjs` 全绿**（会自动登录本地实例、点开远端会话、截图、收集 console error）；
-   - 我**亲自看过截图**，并逐条对照 `docs/意图.md` §4 的交互表；
-   - 宿主半改动已重启实例验证，客户端改动已刷新验证。
-4. 只要功能还有一项不对，就**不合**；需要保留进度就继续在该分支上 commit。
-5. 已经合错的，**回滚那次 merge**，不要「在新 commit 里顺手修」把 master 当成工作区。
-6. 提交信息：Conventional Commits + 中文主题，正文必须写「怎么验证的」；验证方式写不出来的提交，
-   说明还没做完，留在功能分支上。
-
-## 自检闭环（不许再让用户当第一验收人）
+## 自检闭环
 
 ```sh
 # 1) 起一个隔离 profile 的 web 实例（复制 desktop profile，端口 3100）
