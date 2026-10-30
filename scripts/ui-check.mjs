@@ -98,6 +98,36 @@ try {
   })
   page.on('pageerror', (error) => consoleErrors.push(String(error)))
 
+  // 交付物卡片的两条按会话路由：远端会话必须走 /dsh-peerbar/api/asset 转发，
+  // 直接打本机 /api/changes.* 只会 404（卡片就不出现）。§10 用这两份记录断言。
+  const assetProxies = []
+  const directChanges = []
+  const rpcCalls = []
+  page.on('response', (response) => {
+    const url = response.url()
+    if (url.includes('/dsh-peerbar/api/hosts/')) {
+      let endpoint = ''
+      try {
+        endpoint = (response.request().postData() ?? '').match(/"endpoint":"([^"]+)"/)?.[1] ?? ''
+      } catch {
+        /* 忽略 */
+      }
+      if (endpoint) rpcCalls.push({ status: response.status(), endpoint })
+      return
+    }
+    if (url.includes('/dsh-peerbar/api/asset')) {
+      let target = ''
+      try {
+        target = new URL(url).searchParams.get('path') ?? ''
+      } catch {
+        /* 忽略 */
+      }
+      assetProxies.push({ status: response.status(), target })
+      return
+    }
+    if (url.includes('/api/changes.')) directChanges.push({ status: response.status(), url: url.replace(/^https?:\/\/[^/]+/, '') })
+  })
+
   await page.goto(base, { waitUntil: 'networkidle2', timeout: 40000 })
   // 官方树会异步出本机工作区，远端组要等第一轮 /state 回来（5s 内）。
   await until('侧栏出现工作区行', () => page.evaluate(() => document.querySelectorAll('[data-row-key^="workspace:"]').length > 0), 30000)
@@ -1087,6 +1117,171 @@ try {
   }
   await page.keyboard.press('Escape')
   await sleep(600)
+
+  // 10 远端会话的「已编辑 N 个文件」卡片（官方 ui-deliverables）
+  //    卡片用普通 fetch 读 `/api/changes.summary?sessionId=…&seq=…`，摘要只存在
+  //    记录它的那个 Host 进程里。联邦视图里那个会话属于远端，本机路由只能 404，
+  //    所以插件把它改写到 `/dsh-peerbar/api/asset` 转发。这里：
+  //      1) 找一条**真带 `workspace/changes` 宣告**的远端会话（没有就记 skipped）；
+  //      2) 先确认远端摘要还活着（Host 重启就没了，那是既定行为，记 skipped）；
+  //      3) 打开它，断言卡片出现、转发 200、没有任何直连 `/api/changes.*`。
+  const changesFixture = await page.evaluate(async () => {
+    const state = await (await fetch('/dsh-peerbar/api/state', { credentials: 'same-origin' })).json()
+    const candidates = []
+    for (const host of state.hosts ?? []) {
+      if (host.enabled !== true || host.status !== 'online') continue
+      for (const workspace of host.workspaces ?? []) {
+        for (const session of (workspace.sessions ?? []).slice(0, 3)) {
+          if (session.archived === true) continue
+          candidates.push({
+            hostId: host.hostId,
+            hostName: host.name,
+            workspaceTitle: workspace.name ?? '',
+            sessionId: session.rawId,
+          })
+        }
+      }
+    }
+    const probe = (candidate) =>
+      new Promise((resolve) => {
+        let settled = false
+        let socket
+        const finish = (value) => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
+          try {
+            socket?.close()
+          } catch {
+            /* 忽略 */
+          }
+          resolve(value)
+        }
+        const timer = setTimeout(() => finish(null), 3000)
+        try {
+          const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:'
+          const query = new URLSearchParams({ hostId: candidate.hostId, sessionId: candidate.sessionId })
+          socket = new WebSocket(`${scheme}//${location.host}/dsh-peerbar/api/follow?${query.toString()}`)
+        } catch {
+          finish(null)
+          return
+        }
+        socket.addEventListener('message', (event) => {
+          let message
+          try {
+            message = JSON.parse(event.data)
+          } catch {
+            return
+          }
+          const value = message?.value
+          if (message?.type !== 'item' || value?.type !== 'snapshot' || !Array.isArray(value.records)) return
+          const record = value.records.find((item) => (item?.event?.type ?? item?.type) === 'workspace/changes')
+          if (!record) return finish(null)
+          finish({ ...candidate, seq: record.event?.seq ?? record.seq ?? null })
+        })
+        socket.addEventListener('error', () => finish(null))
+      })
+    for (const candidate of candidates.slice(0, 6)) {
+      const found = await probe(candidate)
+      if (found) return found
+    }
+    return null
+  })
+
+  if (!changesFixture) {
+    first.changesCard = { skipped: '远端没有带 workspace/changes 宣告的会话' }
+  } else {
+    const summaryProbe = await page.evaluate(async (fixture) => {
+      const path = `/api/changes.summary?sessionId=${encodeURIComponent(fixture.sessionId)}&seq=${fixture.seq}`
+      const url = `/dsh-peerbar/api/asset?hostId=${encodeURIComponent(fixture.hostId)}&path=${encodeURIComponent(path)}`
+      const response = await fetch(url, { credentials: 'same-origin' })
+      return { status: response.status, upstream: response.headers.get('x-peerbar-upstream') }
+    }, changesFixture)
+
+    if (summaryProbe.status !== 200) {
+      first.changesCard = { skipped: `远端摘要已不可读（HTTP ${summaryProbe.status}）` }
+    } else {
+      // 展开 owning Host 与工作区，再点中那条会话
+      await page.evaluate((fixture) => {
+        for (const row of document.querySelectorAll('.koUx-W_projectRow')) {
+          if (row.innerText.trim() === fixture.hostName && row.getAttribute('aria-expanded') !== 'true') row.click()
+        }
+      }, changesFixture)
+      await sleep(700)
+      await page.evaluate((fixture) => {
+        for (const row of document.querySelectorAll('.koUx-W_projectRow')) {
+          const text = (row.innerText ?? '').replace(/\s+/g, ' ').trim()
+          if (text === `${fixture.workspaceTitle} · ${fixture.hostName}` && row.getAttribute('aria-expanded') !== 'true') row.click()
+        }
+      }, changesFixture)
+      await sleep(900)
+      const clicked = await page.evaluate(
+        (id) => {
+          const row = document.querySelector(`[data-row-key="session:${id}"]`)
+          row?.click()
+          return Boolean(row)
+        },
+        changesFixture.sessionId,
+      )
+      if (!clicked) problems.push('侧栏里找不到带改动记录的远端会话行（§10 无法打开）')
+      const cardShown = clicked
+        ? await until(
+            '远端会话里出现改动文件卡片',
+            async () => page.evaluate(() => /已编辑\s*\d+\s*个文件/.test(document.body.innerText)),
+            25000,
+          ).catch(() => false)
+        : false
+      await page.screenshot({ path: path.join(OUT, 'ui-11-changes-card.png') })
+      const forwarded = assetProxies.filter((item) => item.status === 200 && item.target.startsWith('/api/changes.summary'))
+      if (!cardShown) problems.push('远端会话没有渲染出「已编辑 N 个文件」卡片（摘要没转发成功？）')
+      if (forwarded.length === 0) problems.push('改动摘要没有走 /dsh-peerbar/api/asset 转发（仍是直连 /api/changes.summary）')
+      // 只认「这条远端会话」的直连失败：本机会话的摘要随 Host 重启消失，
+      // 那是官方的既定行为（卡片不出现），不是本节的回归。
+      const directHits = directChanges.filter(
+        (item) => item.status >= 400 && item.url.includes(encodeURIComponent(changesFixture.sessionId)),
+      )
+      if (directHits.length > 0) problems.push(`仍有直连 /api/changes.* 的失败请求：${JSON.stringify(directHits.slice(0, 2))}`)
+      // 同一轮顺手核对回复下的 👍/👎：0.2.2 的 messageFeedback 是 Remote 名字空间，
+      // 不转发就会在本机读不到远端会话的反馈，条形下方显示「反馈状态加载失败」。
+      // 反馈状态是懒加载的（首次 focus/悬停评分按钮才读），所以这里主动 focus 一下。
+      const feedbackFocused = await page.evaluate(() => {
+        const button = [...document.querySelectorAll('button[aria-label]')].find(
+          (node) => node.getAttribute('aria-label') === '好的回答',
+        )
+        if (!button) return false
+        button.focus()
+        button.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }))
+        return true
+      })
+      await sleep(1500)
+      const feedback = await page.evaluate(() => ({
+        failed: (document.body.innerText ?? '').includes('反馈状态加载失败'),
+        buttons: document.querySelectorAll('[aria-label="好的回答"]').length,
+      }))
+      const feedbackCalls = rpcCalls.filter((item) => item.endpoint.startsWith('messageFeedback/'))
+      if (feedback.failed) problems.push('远端会话里出现「反馈状态加载失败」（messageFeedback 没有转发）')
+      if (feedbackCalls.some((item) => item.status >= 400)) {
+        problems.push(`messageFeedback 转发失败：${JSON.stringify(feedbackCalls.filter((item) => item.status >= 400).slice(0, 2))}`)
+      }
+      if (feedbackFocused && !feedbackCalls.some((item) => item.endpoint === 'messageFeedback/list' && item.status === 200)) {
+        problems.push('远端会话的反馈状态没有经 messageFeedback/list 读到（RPC 里没有成功的 list）')
+      }
+      first.changesCard = {
+        host: changesFixture.hostName,
+        sessionId: changesFixture.sessionId,
+        seq: changesFixture.seq,
+        shown: Boolean(cardShown),
+        forwarded: forwarded.length,
+        directHits: directHits.length,
+        feedback: {
+          focused: feedbackFocused,
+          failed: feedback.failed,
+          calls: feedbackCalls.length,
+          buttons: feedback.buttons,
+        },
+      }
+    }
+  }
 
   // ---- 收尾 ----
   const knownWarnings = consoleErrors.filter((text) => KNOWN_NOISE.some((pattern) => pattern.test(text)))

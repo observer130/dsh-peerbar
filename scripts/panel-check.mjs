@@ -212,11 +212,22 @@ try {
         .find((button) => button.getAttribute('aria-label') === '自动化任务')?.click()
     })
     await new Promise((resolve) => setTimeout(resolve, 2500))
+    // dsh 0.2.2 的「自动化任务」页默认只看「已开启」，夹具里的任务早已投递完
+    // （status=inactive），不点「全部」是看不到的——这不是插件的数据问题。
+    const filter = await page.evaluate(() => {
+      const all = [...document.querySelectorAll('button, [role="tab"], [role="radio"]')].find(
+        (node) => (node.textContent ?? '').trim() === '全部',
+      )
+      if (!all) return 'none'
+      all.click()
+      return 'all'
+    })
+    await new Promise((resolve) => setTimeout(resolve, 1200))
     const listed = await page.evaluate((titles) => {
       const text = document.body.innerText ?? ''
       return titles.filter((title) => text.includes(title))
     }, tasks.tasks.slice(0, 3))
-    result.schedule = { total: tasks.tasks.length, listed }
+    result.schedule = { total: tasks.tasks.length, filter, listed }
     if (listed.length === 0) problems.push('「自动化任务」页没有列出远端任务')
   }
 

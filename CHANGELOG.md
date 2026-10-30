@@ -20,14 +20,32 @@
   对话框顶部可选「本机 / nv50 / m50」；远端经只读 `directoryPicker/list` 浏览、
   `workspace/create {path}` 在远端注册，本机分支仍交回官方 `onPicked`（建工作区 +
   开新会话）。路径框可直接编辑回车跳转；桌面端本机是 native picker 时退化为系统对话框
+- **远端会话的「已编辑 N 个文件」卡片 / review 页签**：官方 ui-deliverables 用普通
+  `fetch` 读 `/api/changes.summary|diff`（按会话寻址），摘要只存在记录它的 Host 进程里，
+  联邦视图里本机路由只能 404，卡片整块不出现（验收反馈：比远端原生 web 少一块）。
+  官方 `connection.fetch.register` 同路径直接抛错、无法覆盖，所以宿主半新增
+  `GET /dsh-peerbar/api/asset`（白名单两条 pathname，带该 Host cookie 转发、401 就地换
+  cookie 重试、只回传 content-type 与远端状态），客户端半把这两条请求按会话归属改写到
+  转发路由。卡片、逐文件对比、review 页签与原生的渲染一致；`present.open|changes.open`
+  （在主机应用里打开）仍不转发
+- **消息反馈（👍/👎）跟着远端走**：0.2.2 的反馈状态来自 Remote 名字空间
+  `messageFeedback`（`list/put/delete`，参数按会话）。不转发时本机拿远端会话 id 去读，
+  回复下方显示「反馈状态加载失败」；现在按会话归属改投 `messageFeedback/*`（读是常态，
+  写只在亲手点评分/删除时发生），进 RPC 白名单
 - **上游提案**：`docs/上游提案-侧栏分组座位.md` 说明为什么「本机/nv50/m50」分组行
   需要官方新增座位（list 分组头或 `WorkspaceView.section`），以及两种增量 API 建议
 - **自检**：`ui-check` 新增 §1b（加载后远端组必须全收起）、§9（展开→清标记→重载→
   又被收起的迁移验证）、§1c（对话框有主机标签且能列远端目录）、§8（在 nv50 的 `/tmp`
-  注册工作区 → 侧栏出现 `tmp · nv50` → `workspace/delete` 清掉）
-- **验证**：`node --check` 通过；`node --test` 78 pass；`node scripts/ui-check.mjs` 全绿
-  （截图 `ui-0-add-workspace.png`、`ui-0b-add-workspace-remote.png`、`ui-8-remote-workspace.png`）；
-  `node scripts/panel-check.mjs` 通过（远端文档预览按数据记 skipped）
+  注册工作区 → 侧栏出现 `tmp · nv50` → `workspace/delete` 清掉）、§10（找一条带
+  `workspace/changes` 的远端会话 → 卡片出现 → 摘要走 `/api/asset` 转发且没有直连 404；
+  远端进程重启后摘要消失时记 skipped）
+- **适配 dsh 0.2.2-alpha.2**：桌面运行时 2026-10-30 升级后，官方计划页签改读
+  `session/events`（0.2.1 叫 `session/page`，远端还没有新端点）。客户端半把
+  `session/events` 翻译成远端的 `session/page`（补 `throughSeq`、补回 `cursor`），
+  远端会话的计划预览恢复
+- **验证**：`node --check` 通过；`node --test` 84 pass；`node scripts/ui-check.mjs` 全绿
+  （截图 `ui-0-add-workspace.png`、`ui-0b-add-workspace-remote.png`、`ui-8-remote-workspace.png`、
+  `ui-11-changes-card.png`）；`node scripts/panel-check.mjs` 通过（远端文档预览按数据记 skipped）
 
 ## 1.1.0 — 计划预览全文 + 定时任务实时刷新（2026-10-29）
 
