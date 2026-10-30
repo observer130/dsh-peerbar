@@ -8,7 +8,7 @@
 - **技术栈**：纯 JavaScript ESM，**无构建步骤**，目标零第三方依赖。宿主半跑在 Node，客户端半是浏览器 `__ModuleLoader__` bundle。
 - **目标宿主**：桌面运行时 `0.2.2-alpha.2`（2026-10-30 升级，本机实测通过）；远端 Host 仍是
   `0.2.1-rc.x`（没有 `session/events`，插件把它翻译成 `session/page`）。profile `~/.dsh/profiles/desktop`。
-- **当前阶段**：`master` = 1.1.0；功能分支 `feat/remote-workspace-ux` = 1.2.0（等验收）。路线仍是**原生会话联邦**：不注册 `sidebar.workspaces`，把远端数据投影进官方 store，官方三栏原样渲染；`session/control`、`$events`、`session/follow` 三条桥已接上。1.2.0 三件事：①侧栏**主机分组**（本机/nv50/m50 可折叠）——用官方「按工作区树」+ 投影出来的合成父工作区（远端 `path: "nv50:/..."`、本机 `/`），不注册座位；分组是默认形态、没有开关，用户切走分组方式时自动退场、退回平铺；主机行图标靠 CSS mask 换（本机显示器 / 远端云），工作区标题分组时不带主机后缀；**别再为这个功能去自绘树**。②远端工作区组默认收起（`setGroupExpanded` + 本地账本 + 一次性迁移）。③接管官方 `sidebar.workspaces.directoryFlow` / `conversation.hero.workspace.directoryFlow`，「添加工作区」可先选主机、在远端 `workspace/create`。另有两件适配/补齐：④远端会话的「已编辑 N 个文件」卡片与 review 页签——官方按会话读
+- **当前阶段**：`master` = 1.2.0（远程工作区管理优化 + 停止修复，2026-10-30 验收通过）。路线仍是**原生会话联邦**：不注册 `sidebar.workspaces`，把远端数据投影进官方 store，官方三栏原样渲染；`session/control`、`$events`、`session/follow` 三条桥已接上。1.2.0 三件事：①侧栏**主机分组**（本机/nv50/m50 可折叠）——用官方「按工作区树」+ 投影出来的合成父工作区（远端 `path: "nv50:/..."`、本机 `/`），不注册座位；分组是默认形态、没有开关，用户切走分组方式时自动退场、退回平铺；主机行图标靠 CSS mask 换（本机显示器 / 远端云），工作区标题分组时不带主机后缀；**别再为这个功能去自绘树**。②远端工作区组默认收起（`setGroupExpanded` + 本地账本 + 一次性迁移）。③接管官方 `sidebar.workspaces.directoryFlow` / `conversation.hero.workspace.directoryFlow`，「添加工作区」可先选主机、在远端 `workspace/create`。另有两件适配/补齐：④远端会话的「已编辑 N 个文件」卡片与 review 页签——官方按会话读
   `/api/changes.summary|diff`，本机没有远端摘要，宿主半用 `GET /dsh-peerbar/api/asset`
   转发（白名单两条路径），客户端半在 `window.fetch` 上按会话归属改写；官方
   `connection.fetch.register` 同路径会抛错，**别再试图覆盖官方路由**。⑤0.2.2 的计划页签
