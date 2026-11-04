@@ -29,6 +29,7 @@ test('白名单放行已知端点', () => {
     'sessionReferenceResolver/candidates',
     'skills/list',
     'session/page', // 只读：计划页签按 follow 的 cursor 往前翻页
+    'userQuestions/answer', // 远端会话的 inbox 提问回答（用户亲手提交）
     'messageFeedback/list', // 回复下的 👍/👎 状态（按会话读）
     'messageFeedback/put', // 用户亲手点评分才写
     'messageFeedback/delete',
