@@ -128,6 +128,7 @@ test('新建工作区：插到最前，带 workspaceId 与目录名', () => {
     workspace: { workspaceId: 'ws-c', path: '/c', title: 'charlie', sessionIds: [] },
   })
   assert.equal(next[0].workspaceId, 'ws-c')
+  assert.equal(next[0].id, `peerbar:${HOST}:ws:ws-c`, '虚拟 id 必须与 groupSessions 的 registry 模式一致')
   assert.equal(next[0].name, 'charlie')
   assert.equal(next[0].cwd, '/c')
   assert.deepEqual(next[0].sessions, [])
@@ -227,6 +228,8 @@ test('白名单里的每个端点都要有明确归属（回写 or 已知无需�
     'terminal/create',
     'terminal/rename',
     'terminal/close',
+    // 用户提问：答案是会话内容，由 $events / 轮询反映，不进侧栏快照。
+    'userQuestions/answer',
     // 消息反馈：状态活在消息条形的 👍/👎 上，不进侧栏快照。
     // put/delete 只由用户亲手点评分触发，不改变工作区/会话行。
     'messageFeedback/list',

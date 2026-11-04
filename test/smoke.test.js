@@ -208,6 +208,45 @@ test('rpc 路由处理器可执行，白名单生效', async () => {
   // 白名单内但 Host 不存在：404
   const missing = await post('/dsh-peerbar/api/hosts/h_nope/rpc', { endpoint: 'session/prompt', args: {} })
   assert.equal(missing.statusCode, 404)
+
+  // 无 body 的写请求也必须能过 guard（客户端 delete / probe 都不带 body）。
+  // 这里只验证“不是 415”：Host 不存在时应走到业务分支并返回 404。
+  const noBody = (method, url) =>
+    new Promise((resolve, reject) => {
+      const req = {
+        method,
+        url,
+        headers: {
+          host: '127.0.0.1:0',
+          origin: 'http://127.0.0.1:0',
+          'x-dsh-peerbar-action': '1',
+          'content-type': 'application/json',
+        },
+        socket: { remoteAddress: '127.0.0.1' },
+        on(event, fn) {
+          if (event === 'end') fn()
+        },
+        destroy() {},
+      }
+      const res = {
+        statusCode: 0,
+        body: '',
+        setHeader() {},
+        writeHead(code) {
+          this.statusCode = code
+        },
+        end(chunk) {
+          this.body = String(chunk ?? '')
+          resolve(this)
+        },
+      }
+      Promise.resolve(hostsRoute.handler(req, res)).catch(reject)
+    })
+
+  const deleted = await noBody('DELETE', '/dsh-peerbar/api/hosts/h_nope')
+  assert.equal(deleted.statusCode, 404, `无 body 的 DELETE 被 guard 拦下: ${deleted.body}`)
+  const probed = await noBody('POST', '/dsh-peerbar/api/hosts/h_nope/probe')
+  assert.equal(probed.statusCode, 404, `无 body 的 probe 被 guard 拦下: ${probed.body}`)
 })
 
 /**
