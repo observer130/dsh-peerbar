@@ -97,6 +97,22 @@ test('变更类要求 JSON 与自定义头', () => {
   assert.deepEqual(ok, { ok: true })
 })
 
+test('没有 body 的 DELETE 只要带齐头部就放行（请求头不依赖 body）', () => {
+  const result = checkRequest(
+    req({
+      method: 'DELETE',
+      headers: {
+        host: '127.0.0.1:3080',
+        origin: 'http://127.0.0.1:3080',
+        'content-type': 'application/json',
+        'x-dsh-peerbar-action': '1',
+      },
+    }),
+    { methods: ['POST', 'PATCH', 'DELETE'], requireJson: true, actionHeader: 'x-dsh-peerbar-action' },
+  )
+  assert.deepEqual(result, { ok: true })
+})
+
 test('方法不在白名单 → 405', () => {
   const result = checkRequest(req({ method: 'PUT', headers: { host: '127.0.0.1:3080' } }), {
     methods: ['GET'],
