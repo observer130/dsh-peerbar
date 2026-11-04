@@ -7,7 +7,20 @@
  */
 import assert from 'node:assert/strict'
 
-export async function loadClientModule() {
+// 多个测试文件会并行跑；它们都要临时改 globalThis.window/console。
+// 用一条串行链保证同一时刻只有一个文件在执行 factory。
+let loadChain = Promise.resolve()
+
+export function loadClientModule() {
+  const run = loadChain.then(loadOnce, loadOnce)
+  loadChain = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  return run
+}
+
+async function loadOnce() {
   const previousWindow = globalThis.window
   const previousFlag = globalThis.__PEERBAR_TEST__
   const previousWarn = console.warn
