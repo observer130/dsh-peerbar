@@ -248,6 +248,113 @@ try {
   }
   await page.screenshot({ path: path.join(OUT, 'ui-1-sidebar.png') })
 
+  // ---- 0c) 新会话工作区下拉：主机标签只做不可选标题，工作区缩进在其下 ----
+  const pickerButton = await page.evaluate(() => {
+    const buttons = [...document.querySelectorAll('button,[role="button"]')].filter(
+      (node) => node.getAttribute('aria-label') === '选择工作区',
+    )
+    const button = buttons[buttons.length - 1]
+    if (!button) return false
+    button.click()
+    return true
+  })
+  if (!pickerButton) problems.push('页面里没有「选择工作区」按钮')
+  await sleep(800)
+  const picker = await page.evaluate((names) => {
+    const menu = [...document.querySelectorAll('[role="menu"]')].pop()
+    if (!menu) return null
+    const entries = [...menu.querySelectorAll('[role="menuitem"],[role="presentation"]')]
+      .filter((node) => !node.querySelector('[role="menuitem"]'))
+      .map((node) => {
+        const label = node.querySelector('.dshp-pickerWorkspaceLabel')
+        return {
+          role: node.getAttribute('role'),
+          text: (node.textContent ?? '').trim(),
+          indent: label ? getComputedStyle(label).paddingLeft : null,
+        }
+      })
+    return {
+      entries,
+      hostAsItem: entries
+        .filter((entry) => entry.role === 'menuitem' && names.includes(entry.text))
+        .map((entry) => entry.text),
+      hostLabels: entries
+        .filter((entry) => entry.role === 'presentation' && names.includes(entry.text))
+        .map((entry) => entry.text),
+      indented: entries.filter((entry) => entry.role === 'menuitem' && entry.indent === '18px').length,
+      add: entries.some((entry) => entry.role === 'menuitem' && entry.text === '添加工作区'),
+      hosts: names,
+    }
+  }, ['本机', ...hostNames])
+  first.picker = picker
+  await page.screenshot({ path: path.join(OUT, 'ui-0c-picker.png') })
+  let pickerAdd = null
+  let pickerAddClicked = false
+  if (picker?.add) {
+    pickerAddClicked = await page.evaluate(() => {
+      const menu = [...document.querySelectorAll('[role="menu"]')].pop()
+      const item = [...(menu?.querySelectorAll('[role="menuitem"]') ?? [])].find(
+        (node) => (node.textContent ?? '').trim() === '添加工作区',
+      )
+      if (!item) return false
+      item.click()
+      return true
+    })
+    if (pickerAddClicked) {
+      pickerAdd = await until(
+        '下拉里的添加工作区对话框',
+        () =>
+          page.evaluate((names) => {
+            const input = document.querySelector('.dshp-pathInput')
+            if (!input) return null
+            const text = document.body.innerText ?? ''
+            return {
+              local: text.includes('本机'),
+              hosts: names.filter((name) => text.includes(name)),
+              hasInput: Boolean(input),
+            }
+          }, hostNames),
+        8000,
+      ).catch(() => null)
+      await sleep(500)
+      await page.screenshot({ path: path.join(OUT, 'ui-0d-picker-add.png') })
+      await page.evaluate(() => {
+        const input = document.querySelector('.dshp-pathInput')
+        const dialog = input?.closest('[role="dialog"]') ?? document.body
+        const cancel = [...dialog.querySelectorAll('button')].find(
+          (node) => node.offsetParent !== null && (node.innerText ?? '').trim() === '取消',
+        )
+        cancel?.click()
+      })
+      await until('下拉添加对话框关闭', () => page.evaluate(() => !document.querySelector('.dshp-pathInput')), 5000).catch(
+        () => false,
+      )
+    }
+  }
+  first.pickerAdd = pickerAdd
+  await page.keyboard.press('Escape')
+  await sleep(300)
+  const pickerClosed = await page.evaluate(() => !document.querySelector('[role="menu"]'))
+  if (!picker) {
+    problems.push('新会话工作区下拉没有打开（[role=menu] 不存在）')
+  } else {
+    for (const name of first.picker.hosts) {
+      if (!picker.hostLabels.includes(name)) problems.push(`工作区下拉缺少主机标题「${name}」`)
+    }
+    if (picker.hostAsItem.length > 0) {
+      problems.push(`主机标签仍被当成可选取工作区：${picker.hostAsItem.join('、')}`)
+    }
+    if (picker.indented === 0) problems.push('工作区行没有按主机标题缩进（.dshp-pickerWorkspaceLabel padding-left 不是 18px）')
+    if (!picker.add) problems.push('工作区下拉缺少「添加工作区」')
+    if (picker.add && !pickerAddClicked) problems.push('工作区下拉的「添加工作区」点不开')
+    if (pickerAdd && !pickerAdd.local) problems.push('下拉添加工作区对话框缺少「本机」')
+    if (pickerAdd) {
+      const missing = hostNames.filter((name) => !pickerAdd.hosts.includes(name))
+      if (missing.length > 0) problems.push(`下拉添加工作区对话框缺少主机：${missing.join('、')}`)
+    }
+    if (!pickerClosed) problems.push('工作区下拉按 Escape 后没有关闭')
+  }
+
   if (tree.shadowRows > 0) problems.push(`仍出现影子树行（.dshp-sessionRow × ${tree.shadowRows}），说明没有走官方侧栏`)
   if (hostRows.length !== hostNames.length + 1) {
     problems.push(`主机行应为「本机 + ${hostNames.length} 台」，实际 ${hostRows.length} 行（${hostRows.map((row) => row.text).join('、')}）`)
