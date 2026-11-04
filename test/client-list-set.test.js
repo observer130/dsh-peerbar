@@ -9,48 +9,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-async function loadClientModule() {
-  const previousWindow = globalThis.window
-  const previousFlag = globalThis.__PEERBAR_TEST__
-  const previousWarn = console.warn
-  let definition = null
-
-  globalThis.window = {
-    __ModuleLoader__: {
-      load(input) {
-        definition = input
-      },
-    },
-  }
-  globalThis.__PEERBAR_TEST__ = true
-  console.warn = () => {}
-
-  try {
-    await import(`../lib/client.js?test=${Date.now()}`)
-    assert.ok(definition, 'client.js 没有调用 __ModuleLoader__.load')
-    const fakeRequire = (name) => {
-      if (name === 'react') {
-        return {
-          createElement() {},
-          Fragment: {},
-          useRef() {},
-          useState() {},
-          useCallback() {},
-          useEffect() {},
-        }
-      }
-      throw new Error(`unexpected require: ${name}`)
-    }
-    const exported = definition.factory(fakeRequire)
-    assert.ok(exported.__peerbarTest, '测试环境没有暴露 __peerbarTest')
-    return exported.__peerbarTest
-  } finally {
-    globalThis.window = previousWindow
-    if (previousFlag === undefined) delete globalThis.__PEERBAR_TEST__
-    else globalThis.__PEERBAR_TEST__ = previousFlag
-    console.warn = previousWarn
-  }
-}
+import { loadClientModule } from './support/client-module.js'
 
 test('list.set 以 next 为基底：保留 phase 与本地 projectionsBySession', async () => {
   const { buildListSetPayload } = await loadClientModule()
