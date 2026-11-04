@@ -41,4 +41,6 @@ test('退避带抖动但不越界', () => {
   assert.equal(nextDelayMs(1, { jitter: 0.2, random: () => 0 }), 4000)
   assert.equal(nextDelayMs(1, { jitter: 0.2, random: () => 1 }), 6000)
   assert.equal(nextDelayMs(1, { jitter: 0.2, random: () => 0.5 }), 5000)
+  // 抖动后也要封顶：第 5 次失败 raw=60s，+20% 不能变成 72s。
+  assert.equal(nextDelayMs(5, { jitter: 0.2, random: () => 1 }), 60000)
 })
