@@ -172,8 +172,24 @@ try {
   if (hostNames.length === 0) problems.push('没有读到任何 Host（/state.hosts 为空）')
 
   const readTree = () =>
-    page.evaluate((hostList) => {
+    page.evaluate(async (hostList) => {
       const byId = new Map(hostList.map((host) => [host.hostId, host.name]))
+      // 远端会话行用远端裸 id（session:<rawId>），key 里没有 hostId。
+      // 从 /state 的 workspaces[].sessions[].rawId 建反查表；不能用 DOM 祖先，
+      // 官方侧栏是扁平虚拟列表，会话行不一定嵌在 workspace 行内部。
+      const hostBySession = new Map()
+      try {
+        const state = await fetch('/dsh-peerbar/api/state', { credentials: 'same-origin' }).then((response) => response.json())
+        for (const host of state?.hosts ?? []) {
+          for (const workspace of host.workspaces ?? []) {
+            for (const session of workspace.sessions ?? []) {
+              if (typeof session?.rawId === 'string') hostBySession.set(session.rawId, host.hostId)
+            }
+          }
+        }
+      } catch {
+        /* 反查失败只影响 host 标记，不影响其它断言 */
+      }
       const rows = [...document.querySelectorAll('[data-row-key^="workspace:"], [data-row-key^="session:"]')]
       const groups = []
       const sessions = []
@@ -183,7 +199,10 @@ try {
         const isGroup = key.startsWith('workspace:')
         // 主机根的 key 以 `:hostroot` 结尾（后面没有冒号），工作区/会话是 `:ws:`/`:sess:`
         const match = /^(?:workspace|session):peerbar:([^:]+):(hostroot|ws|sess)(?::|$)/.exec(key)
-        const hostId = match ? match[1] : null
+        let hostId = match ? match[1] : null
+        if (!isGroup && !hostId) {
+          hostId = hostBySession.get(key.slice('session:'.length)) ?? null
+        }
         const entry = {
           key,
           text,
@@ -215,7 +234,12 @@ try {
   const hostRowTexts = ['本机', ...hostNames]
   const isHostRow = (row) => row.isHostRow === true
   const hostRows = tree.groups.filter(isHostRow)
-  const workspaceRowsAtLoad = tree.groups.filter((row) => !isHostRow(row))
+  // 本机根如果正是当前会话所在组，会按 keep 规则保持展开；只有**远端**组
+  // 必须默认收起。这里不能把本机工作区/会话算进“未收起”的断言。
+  const workspaceRowsAtLoad = tree.groups.filter(
+    (row) => !isHostRow(row) && row.hostId && row.hostId !== 'local',
+  )
+  const remoteSessionsAtLoad = tree.sessions.filter((row) => row.hostId && row.hostId !== 'local')
   const first = {
     hostNames,
     hostRows: hostRows.map((row) => row.text),
@@ -230,9 +254,9 @@ try {
   }
   if (hostRows[0]?.text !== '本机') problems.push('主机行第一行不是「本机」')
   if (workspaceRowsAtLoad.length > 0) {
-    problems.push(`分组默认收起时不该出现工作区行（出现 ${workspaceRowsAtLoad.length} 行：${workspaceRowsAtLoad.map((row) => row.text).slice(0, 4).join('、')}）`)
+    problems.push(`分组默认收起时不该出现远端工作区行（出现 ${workspaceRowsAtLoad.length} 行：${workspaceRowsAtLoad.map((row) => row.text).slice(0, 4).join('、')}）`)
   }
-  if (tree.sessions.length > 0) problems.push('分组收起时不该出现会话行')
+  if (remoteSessionsAtLoad.length > 0) problems.push('远端组默认收起时不该出现远端会话行')
 
   // 展开所有主机行：工作区行要出现在各自主机下面（缩进 12px）
   const expandHost = async (label) => {
@@ -443,21 +467,32 @@ try {
     if (!closed) problems.push('目录对话框点取消后没有关闭')
   }
 
-  // ---- 2) 展开第一个远端组 ----
-  const firstRemoteKey = remoteGroups[0]?.key
-  if (firstRemoteKey) {
-    await page.evaluate((key) => {
+  // ---- 2) 展开一个**有会话**的远端组 ----
+  // 不能假设 remoteGroups[0] 有会话：注册过但空着的工作区也会出组。
+  let firstRemoteKey = remoteGroups[0]?.key
+  let remoteSessions = []
+  for (const group of remoteGroups) {
+    const opened = await page.evaluate((key) => {
       const row = document.querySelector(`[data-row-key="${key}"]`)
-      row?.click()
-    }, firstRemoteKey)
-    await sleep(900)
+      if (!row) return false
+      if (row.getAttribute('aria-expanded') === 'false') row.click()
+      return true
+    }, group.key)
+    if (!opened) continue
+    await sleep(700)
+    const expanded = await readTree()
+    // 只取远端主机下的会话：本机根现在可能因为“当前会话不收起”保持展开，
+    // 不能把本机会话当成远端会话点开（否则会点到空白的「新会话」）。
+    remoteSessions = expanded.sessions.filter((session) => session.hostId && session.hostId !== 'local')
+    if (remoteSessions.length > 0) {
+      firstRemoteKey = group.key
+      break
+    }
   }
-  const expanded = await readTree()
-  const remoteSessions = expanded.sessions
   first.remoteSessionRows = remoteSessions.length
   await page.screenshot({ path: path.join(OUT, 'ui-2-remote-expanded.png') })
   if (remoteGroups.length > 0 && remoteSessions.length === 0) {
-    problems.push('第一个远端组展开后没有任何会话行')
+    problems.push('展开远端组后没有任何远端会话行')
   }
 
   // ---- 3) 点开远端会话，官方中栏 ----
@@ -1135,18 +1170,46 @@ try {
       if (!(await expandHost(name))) problems.push(`重载后找不到主机行「${name}」`)
     }
     await sleep(1000)
-    const reCollapsed = await until(
-      '重载后远端组再次收起',
+    // 当前会话所在组按 keep 规则会保持展开；迁移断言只要求“探针组”
+    // 在它不是当前会话组时重新收起。
+    const probeState = await until(
+      '重载后读取探针组折叠状态',
       () =>
-        readRemoteRows().then((remote) => {
-          const expandable = remote.filter((row) => row.expanded !== null)
-          if (expandable.length === 0) return null
-          return expandable.every((row) => row.expanded === 'false') ? true : null
-        }),
+        page.evaluate((key) => {
+          const row = document.querySelector(`[data-row-key="${key}"]`)
+          return row ? row.getAttribute('aria-expanded') : null
+        }, probe.key),
       15000,
-    ).catch(() => false)
-    first.autoCollapseAfterReload = reCollapsed
-    if (!reCollapsed) problems.push('重载后迁移没有把已展开的远端组收起来')
+    ).catch(() => null)
+    const currentWorkspaceId = await page.evaluate(async () => {
+      const selected = [...document.querySelectorAll('[data-row-key^="session:"]')].find(
+        (row) => /selected|selectedRow/i.test(row.className) || row.getAttribute('aria-selected') === 'true',
+      )
+      const rawId = selected?.getAttribute('data-row-key')?.replace(/^session:/, '') ?? null
+      if (!rawId) return null
+      try {
+        const state = await fetch('/dsh-peerbar/api/state', { credentials: 'same-origin' }).then((response) => response.json())
+        for (const host of state?.hosts ?? []) {
+          for (const workspace of host.workspaces ?? []) {
+            if ((workspace.sessions ?? []).some((session) => session.rawId === rawId)) return workspace.workspaceId ?? null
+          }
+        }
+      } catch {
+        /* 读不到就按非当前组处理 */
+      }
+      return null
+    })
+    const probeRawId = probe.workspaceId.replace(/^peerbar:[^:]+:ws:/, '')
+    const keepExpanded = currentWorkspaceId !== null && currentWorkspaceId === probeRawId
+    const reCollapsed = keepExpanded ? probeState === 'true' : probeState === 'false'
+    first.autoCollapseAfterReload = { probeState, currentWorkspaceId, keepExpanded, passed: reCollapsed }
+    if (!reCollapsed) {
+      problems.push(
+        keepExpanded
+          ? `重载后当前会话所在远端组没有保持展开（${probeState}）`
+          : `重载后迁移没有把已展开的远端组收起来（${probeState}）`,
+      )
+    }
   } else {
     problems.push('找不到任何远端工作区行（迁移无法验证）')
   }
