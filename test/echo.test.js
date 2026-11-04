@@ -128,6 +128,7 @@ test('新建工作区：插到最前，带 workspaceId 与目录名', () => {
     workspace: { workspaceId: 'ws-c', path: '/c', title: 'charlie', sessionIds: [] },
   })
   assert.equal(next[0].workspaceId, 'ws-c')
+  assert.equal(next[0].id, `peerbar:${HOST}:ws:ws-c`, '虚拟 id 必须与 groupSessions 的 registry 模式一致')
   assert.equal(next[0].name, 'charlie')
   assert.equal(next[0].cwd, '/c')
   assert.deepEqual(next[0].sessions, [])
