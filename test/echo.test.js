@@ -228,6 +228,8 @@ test('白名单里的每个端点都要有明确归属（回写 or 已知无需�
     'terminal/create',
     'terminal/rename',
     'terminal/close',
+    // 用户提问：答案是会话内容，由 $events / 轮询反映，不进侧栏快照。
+    'userQuestions/answer',
     // 消息反馈：状态活在消息条形的 👍/👎 上，不进侧栏快照。
     // put/delete 只由用户亲手点评分触发，不改变工作区/会话行。
     'messageFeedback/list',
