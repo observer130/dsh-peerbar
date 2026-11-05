@@ -23,7 +23,7 @@
 
 | 项 | 值 |
 | --- | --- |
-| 宿主 | DSH Desktop `@deepseek-ai/dsh-desktop 0.2.2-alpha.2`（2026-10-30 升级；本机唯一安装）；远端 Host 仍是 0.2.1-rc.x |
+| 宿主 | DSH Desktop `@deepseek-ai/dsh-desktop 0.2.2-alpha.3`（本机唯一安装）；远端 Host 兼容 0.2.1-rc.x |
 | 自带运行时 | `/opt/dsh-desktop-linux-bin/resources/runtime` — Node 24.21.0 / pnpm 11.28.5 |
 | profile | `~/.dsh/profiles/desktop`，**由 Electron 独占**，CLI 无法管理 |
 | 限制 | agent shell 有 `ulimit -v 4GB`，不要从里面直接起 dsh 进程 |
@@ -58,7 +58,7 @@ scripts/security-check.sh http://127.0.0.1:<port>
 npm pack
 ```
 
-M0 已落地以上命令；`npm pack` 出的 tgz 可直接在桌面版插件页安装。
+`npm pack` 出的 tgz 可直接在桌面版插件页安装。
 
 ## 目录
 
@@ -68,6 +68,8 @@ lib/config.js    注册表与缓存读写（0600、原子替换）
 lib/guard.js     回环 + 同源栅栏（P0-5 的地基）
 lib/identity.js  origin 归一化、hostId、虚拟 ID、cwd → 工作区
 lib/assets.js    远端会话级只读路由白名单（交付物卡片的 changes.summary / changes.diff）
+lib/events.js    $events 转发桥（审批、提问、schedule/changed）
+lib/schedule.js  定时任务 catalog 兼容层与字段归一化
 lib/remote.js    令牌换 cookie、RPC 信封、session/list、分页、错误分类
 lib/rpc.js       远端 RPC 白名单（/hosts/<id>/rpc 只放行这张表）
 lib/stream.js    Remote 流通道：workspace/follow 归档集、workspaceFiles/changes（SSE）、
@@ -80,7 +82,8 @@ lib/peers.js     每 Host 的快照编排、调度与缓存
 lib/codes.js     错误码，前后端共用
 lib/client.js    客户端半：官方 store 投影 + 联邦写操作代理 + 远端会话 binding + settings.section
 test/            node:test 单测
-docs/            意图.md / 架构.md / 现状与计划.md（现行）；插件规范、官方侧栏规格、上游提案、终端设计；archive/ 旧文档
+docs/            意图.md / 架构.md / 插件开发规范.md / 远端终端.md（现行）；
+                 README.md 是文档索引；archive/ 只放历史，不作为依据
 ```
 
 新增文件前先想归属；`lib/index.js` 只做装配，不堆业务。
@@ -96,7 +99,7 @@ docs/            意图.md / 架构.md / 现状与计划.md（现行）；插件
    影子替换下的一堆历史坑（子座位接不回来、`renderSlot` 注入失败）只留在 `docs/archive/`。
 2. 插件自己注册的 `ctx.webServer` 路由**没有任何认证**——dsh 的浏览器 cookie 与 Host/Origin 校验只覆盖 `/api`。同源/回环 guard 必须自己写。
 3. `/api` 不是 REST：`POST /api/<namespace>/<method>` + `{ args }`，流式走 WS `/api/remote.mux`。
-   插件自己的双工通道用 `ctx.webServer.registerUpgrade`（rc.3 已核实，见插件规范 §12）；
+   插件自己的双工通道用 `ctx.webServer.registerUpgrade`（0.2.2-alpha.3 已核实，见插件规范 §12）；
    反向方向本插件是 WS 服务端，服务端帧**不得加掩码**。
 4. 客户端半必须是 `window.__ModuleLoader__.load({ id, factory(require) })`，**不能出现 `import`/`export`**；`react`、`react-dom`、`@deepseek-ai/dsh-client-ui-primitives` 是 baseline external，禁止打包进自己的 bundle。
 5. 宿主半依赖用静态 `export const inject = [...]`，不要手动等 service。
@@ -130,14 +133,22 @@ export function apply(ctx) {
 ## 自检闭环
 
 ```sh
-# 1) 起一个隔离 profile 的 web 实例（复制 desktop profile，端口 3100）
-scripts/dev-server.sh > .workbuddy/tmp/pb-web.log 2>&1 &
+# 1) 用可写的隔离 DSH_HOME 启动 web 实例；不要写 ~/.dsh（当前 sandbox 会 EROFS）。
+#    用受控后台 job 运行，不要用 shell `&`（命令结束会被回收）。
+#    首次：mkdir -p "$DSH_HOME/profiles" && cp -r ~/.dsh/profiles/desktop "$DSH_HOME/profiles/pb-test"
+DSH_HOME="$PWD/.workbuddy/dsh-home" DSH_TEST_PORT=3103 scripts/dev-server.sh
 
 # 2) 自动验收：登录 → 截图侧栏 → 展开远端组 → 点开会话 → 再截图 → 断言
 node scripts/ui-check.mjs --quick   # 日常：不建会话、不发消息、不调真模型（约 40s）
 node scripts/ui-check.mjs           # 发布前全量：远端新建会话 + 真模型回复 + 计划预览（≤180s）
 node scripts/panel-check.mjs        # 派生面板：远端文档预览 + 定时任务目录（缺数据记 skipped）
 ```
+
+- 测试 profile 需要登录态/远端凭据时，从 `~/.dsh` 复制 `.credentials.yaml`、
+  `dsh-peerbar.json`、`*-cache.json`（以及需要的 `sessions/`、`storages/`）到隔离 `DSH_HOME`；
+  这些文件不得入库，也不要把 token 写进日志或结论。
+- 测试 profile 若与本机运行中的 GUI 争端口，移除会抢端口的 bundle（例如 `billion-context`），
+  不要停用户正在用的实例。
 
 - 产物在 `.workbuddy/tmp/`：`ui-1-sidebar.png`、`ui-2-remote-expanded.png`、
   `ui-3-remote-session.png`、`ui-check.json`。
