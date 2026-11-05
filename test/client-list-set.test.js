@@ -46,6 +46,7 @@ test('list.set 以 next 为基底：保留 phase 与本地 projectionsBySession'
   assert.deepEqual(Object.keys(clean.projectionsBySession), ['local-1'])
   assert.equal(clean.projectionsBySession['local-1'].values.subagentCatalog[0].id, 'child')
   assert.notEqual(clean.byId, next.byId, 'byId 需要纯化，不能直接共享引用')
+  assert.notEqual(clean.byId['local-1'], next.byId['local-1'], '行对象也要浅拷贝，避免 Immer 冻结的外层对象')
 })
 
 test('next 缺 phase / projectionsBySession 时回退到 real，并同样剥掉合成行', async () => {
