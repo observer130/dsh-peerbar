@@ -1460,6 +1460,13 @@ try {
   if (!settingsPage) {
     problems.push('设置页找不到「远程主机」内容（.dshp-set 未渲染）')
   } else {
+    // 状态徽标文案：离线一律叫「离线」（用户验收反馈：不该出现「连不上」）
+    const STATE_LABELS = new Set(['在线', '离线', '需要令牌', '证书不受信', '不是 dsh', '版本不兼容', '超时', '已停用'])
+    for (const host of settingsPage.hosts ?? []) {
+      if (host.status && !STATE_LABELS.has(host.status)) {
+        problems.push(`主机「${host.name}」的状态文案是「${host.status}」，不在 在线/离线/需要令牌/证书不受信/不是 dsh/版本不兼容/超时/已停用 之内`)
+      }
+    }
     if (settingsPage.hasSidebarHeading) problems.push('设置页仍出现「侧栏 / 按主机分组 / 收起全部远端工作区」字样（应整体移除）')
     if (settingsPage.hasMoveButtons) problems.push('设置页主机卡片仍有「上移/下移」按钮（应移除）')
     if (settingsPage.addButtons !== 1) problems.push(`设置页「添加」按钮应只有 1 个，实际 ${settingsPage.addButtons}`)
