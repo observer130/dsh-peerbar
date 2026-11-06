@@ -135,6 +135,9 @@ try {
   page.on('response', async (response) => {
     const url = response.url()
     if (!url.includes('/dsh-peerbar/') || response.status() < 400) return
+    // §11 会主动打一次 `/dsh-peerbar/api/schedule` 确认这条合并路由已下线，
+    // 它的 404 是预期结果，不该混进失败证据里。
+    if (/\/dsh-peerbar\/api\/schedule$/.test(url)) return
     let body = ''
     try {
       body = (await response.text()).slice(0, 400)
@@ -847,25 +850,32 @@ try {
 
         // 等第一条回复彻底结束再发「停止」用例。否则第二条会排在队列里：点停止
         // 只停掉第一轮，队列里的 bash 任务接着开跑，running 20s 不归零（假失败）。
+        // 只关心本节自己建的那条会话：同一台 Host 上可能有用户正在跑的会话，
+        // 全 Host 判 running 会把它当成「停止没生效」而假失败。
+        const createdRawId = created.key.replace(/^session:/, '')
         const readRunning = () =>
-          page.evaluate(async (hostId) => {
-            const payload = await fetch('/dsh-peerbar/api/state', { credentials: 'same-origin' }).then((response) => response.json())
-            const host = (payload?.hosts ?? []).find((item) => item.hostId === hostId)
-            const running = []
-            for (const workspace of host?.workspaces ?? []) {
-              for (const session of workspace.sessions ?? []) {
-                if (session.running === true) running.push(session.rawId ?? session.id)
+          page.evaluate(
+            async ([hostId, sessionId]) => {
+              const payload = await fetch('/dsh-peerbar/api/state', { credentials: 'same-origin' }).then((response) => response.json())
+              const host = (payload?.hosts ?? []).find((item) => item.hostId === hostId)
+              const running = []
+              for (const workspace of host?.workspaces ?? []) {
+                for (const session of workspace.sessions ?? []) {
+                  if (session.running === true && (session.rawId ?? session.id) === sessionId) running.push(session.rawId ?? session.id)
+                }
               }
-            }
-            return running
-          }, /^workspace:peerbar:([^:]+):ws:/.exec(firstRemoteKey)?.[1] ?? '')
-        const firstTurnIdle = await until('第一条回复结束', async () => (await readRunning()).length === 0, 60000).catch(
+              return running
+            },
+            [/^workspace:peerbar:([^:]+):ws:/.exec(firstRemoteKey)?.[1] ?? '', createdRawId],
+          )
+        // 120s：远端模型忙（429 / 排队）时一句话也可能跑一分多钟，60s 会误判。
+        const firstTurnIdle = await until('第一条回复结束', async () => (await readRunning()).length === 0, 120000).catch(
           () => false,
         )
         first.firstTurnSettled = Boolean(firstTurnIdle)
         if (!firstTurnIdle) {
           first.firstTurnRunning = await readRunning().catch(() => [])
-          problems.push(`第一条回复 60s 没结束，停止用例可能测到队列里的下一轮（running: ${JSON.stringify(first.firstTurnRunning)}）`)
+          problems.push(`第一条回复 120s 没结束，停止用例可能测到队列里的下一轮（running: ${JSON.stringify(first.firstTurnRunning)}）`)
         }
 
         // 停止按钮：官方 `conversation.cancel()` 先 `sessions.scopeOf(this.ctx)` 解析
@@ -1811,6 +1821,93 @@ try {
           buttons: feedback.buttons,
         },
       }
+    }
+  }
+
+  // ---- §11 自动化任务面板：只显示本机任务，远端任务不进入 ----
+  // 「自动化任务」是全局跨会话视图，和「插件」页一样只应显示本机的东西：
+  // 远端任务混进来会被当成本机任务操作（改期/删除会打到别的机器上）。
+  // 这里用官方信封独立读本机 catalog，核对 ① 面板能列出本机任务；
+  // ② 插件不再暴露合并路由。
+  {
+    // 前面的设置页收尾只按了一次 Escape（关的是「添加主机」弹窗），设置浮层
+    // 可能还盖在页面上；重载一次拿干净页面再切到自动化任务页。
+    await page.goto(base, { waitUntil: 'networkidle2', timeout: 40000 })
+    await until(
+      '重载后侧栏出现工作区行',
+      () => page.evaluate(() => document.querySelectorAll('[data-row-key^="workspace:"]').length > 0),
+      30000,
+    ).catch(() => {})
+    await sleep(1500)
+    const local = await page.evaluate(async () => {
+      try {
+        const response = await fetch('/api/schedule/catalog', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            type: 'client-request',
+            rpcId: `ui-check-${Date.now()}`,
+            method: 'schedule/catalog',
+            payload: { args: {} },
+          }),
+        })
+        const envelope = await response.json()
+        const result = envelope?.result
+        if (result?.ok !== true) return { ok: false, ids: [], titles: [] }
+        const records = Array.isArray(result.value) ? result.value : []
+        return {
+          ok: true,
+          ids: records.map((record) => record?.id).filter((id) => typeof id === 'string'),
+          titles: records.map((record) => record?.title).filter((title) => typeof title === 'string' && title),
+        }
+      } catch {
+        return { ok: false, ids: [], titles: [] }
+      }
+    })
+    const mergedRoute = await page.evaluate(() =>
+      fetch('/dsh-peerbar/api/schedule', { credentials: 'same-origin' })
+        .then((response) => response.status)
+        .catch(() => 0),
+    )
+    if (mergedRoute !== 404) {
+      problems.push(`插件仍在合并远端定时任务（/dsh-peerbar/api/schedule 返回 ${mergedRoute}，应为 404）`)
+    }
+
+    const opened = await page.evaluate(() => {
+      const button = [...document.querySelectorAll('button,a,[role="button"]')].find(
+        (node) => node.textContent?.trim() === '自动化任务',
+      )
+      if (!button) return false
+      button.click()
+      return true
+    })
+    if (!opened) problems.push('侧栏找不到「自动化任务」入口（§11）')
+    await until(
+      '自动化任务页出现标题',
+      () => page.evaluate(() => (document.body.innerText ?? '').includes('已开启')),
+      10000,
+    ).catch(() => problems.push('「自动化任务」页没有渲染出来（§11）'))
+    await sleep(1200)
+    // 夹具里的任务可能已经投递完（status=inactive），默认的「已开启」看不到它，
+    // 点「全部」再断言——这不是插件的数据问题。
+    await page.evaluate(() => {
+      const all = [...document.querySelectorAll('button, [role="tab"], [role="radio"]')].find(
+        (node) => (node.textContent ?? '').trim() === '全部',
+      )
+      all?.click()
+    })
+    await sleep(1000)
+    const text = await page.evaluate(() => document.body.innerText ?? '')
+    const missing = local.titles.filter((title) => !text.includes(title))
+    if (missing.length > 0 && local.ok) {
+      problems.push(`「自动化任务」面板看不到本机任务：${missing.join('、')}`)
+    }
+    await page.screenshot({ path: path.join(OUT, 'ui-12-schedule.png') })
+    first.schedulePanel = {
+      localCatalogReadable: local.ok,
+      local: local.ids.length,
+      mergedRouteStatus: mergedRoute,
+      missingFromPanel: missing.length,
     }
   }
 

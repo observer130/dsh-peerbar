@@ -195,24 +195,39 @@ try {
     }
   }
 
-  // 定时任务：有任务就打开「自动化任务」页核对标题
+  // 定时任务：面板只显示本机任务，用官方信封读本机 catalog，有任务就核对标题
   const tasks = await page.evaluate(async () => {
-    const response = await fetch('/dsh-peerbar/api/schedule', { credentials: 'same-origin' })
-    if (!response.ok) return { ok: false, status: response.status }
-    const value = await response.json()
-    return { ok: true, tasks: (Array.isArray(value) ? value : []).map((item) => item.title).filter(Boolean) }
+    try {
+      const response = await fetch('/api/schedule/catalog', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          type: 'client-request',
+          rpcId: `panel-check-${Date.now()}`,
+          method: 'schedule/catalog',
+          payload: { args: {} },
+        }),
+      })
+      const envelope = await response.json()
+      const result = envelope?.result
+      if (result?.ok !== true) return { ok: false, status: response.status }
+      const records = Array.isArray(result.value) ? result.value : []
+      return { ok: true, tasks: records.map((item) => item.title).filter(Boolean) }
+    } catch {
+      return { ok: false, status: 0 }
+    }
   })
   if (!tasks.ok) {
-    result.schedule = { skipped: true, reason: `catalog 路由 HTTP ${tasks.status}` }
+    result.schedule = { skipped: true, reason: `本机 catalog 读取失败（HTTP ${tasks.status}）` }
   } else if (tasks.tasks.length === 0) {
-    result.schedule = { skipped: true, reason: '当前没有远端定时任务' }
+    result.schedule = { skipped: true, reason: '当前没有本机定时任务' }
   } else {
     await page.evaluate(() => {
       [...document.querySelectorAll('button[aria-label]')]
         .find((button) => button.getAttribute('aria-label') === '自动化任务')?.click()
     })
     await new Promise((resolve) => setTimeout(resolve, 2500))
-    // dsh 0.2.2 的「自动化任务」页默认只看「已开启」，夹具里的任务早已投递完
+    // dsh 0.2.2 的「自动化任务」页默认只看「已开启」，夹具里的任务可能早已投递完
     // （status=inactive），不点「全部」是看不到的——这不是插件的数据问题。
     const filter = await page.evaluate(() => {
       const all = [...document.querySelectorAll('button, [role="tab"], [role="radio"]')].find(
@@ -228,7 +243,7 @@ try {
       return titles.filter((title) => text.includes(title))
     }, tasks.tasks.slice(0, 3))
     result.schedule = { total: tasks.tasks.length, filter, listed }
-    if (listed.length === 0) problems.push('「自动化任务」页没有列出远端任务')
+    if (listed.length === 0) problems.push('「自动化任务」页没有列出本机任务')
   }
 
   result.consoleErrors = consoleErrors

@@ -68,8 +68,7 @@ lib/config.js    注册表与缓存读写（0600、原子替换）
 lib/guard.js     回环 + 同源栅栏（P0-5 的地基）
 lib/identity.js  origin 归一化、hostId、虚拟 ID、cwd → 工作区
 lib/assets.js    远端会话级只读路由白名单（交付物卡片的 changes.summary / changes.diff）
-lib/events.js    $events 转发桥（审批、提问、schedule/changed）
-lib/schedule.js  定时任务 catalog 兼容层与字段归一化
+lib/events.js    $events 转发桥（审批/提问的 waterfall；emit 帧不转发）
 lib/remote.js    令牌换 cookie、RPC 信封、session/list、分页、错误分类
 lib/rpc.js       远端 RPC 白名单（/hosts/<id>/rpc 只放行这张表）
 lib/stream.js    Remote 流通道：workspace/follow 归档集、workspaceFiles/changes（SSE）、
@@ -141,7 +140,7 @@ DSH_HOME="$PWD/.workbuddy/dsh-home" DSH_TEST_PORT=3103 scripts/dev-server.sh
 # 2) 自动验收：登录 → 截图侧栏 → 展开远端组 → 点开会话 → 再截图 → 断言
 node scripts/ui-check.mjs --quick   # 日常：不建会话、不发消息、不调真模型（约 40s）
 node scripts/ui-check.mjs           # 发布前全量：远端新建会话 + 真模型回复 + 计划预览（≤180s）
-node scripts/panel-check.mjs        # 派生面板：远端文档预览 + 定时任务目录（缺数据记 skipped）
+node scripts/panel-check.mjs        # 派生面板：远端文档预览 + 自动化任务页（只读本机任务）
 ```
 
 - 测试 profile 需要登录态/远端凭据时，从 `~/.dsh` 复制 `.credentials.yaml`、
@@ -180,6 +179,7 @@ node scripts/panel-check.mjs        # 派生面板：远端文档预览 + 定时
 - 把令牌写进日志、错误 message 或任何响应体。
 - 做白名单外的转发、任意 WS 帧转发。
 - 任何跨机写操作——**只有用户显式触发时例外**：
-  - 终端：亲手打开右侧栏终端标签，经 `lib/terminal.js` 代理 `terminal/attach|retain`；
-  - 定时任务：在任务详情里改期/删除，经 `schedule/update|delete` 代理到该任务所属 Host。
+  - 终端：亲手打开右侧栏终端标签，经 `lib/terminal.js` 代理 `terminal/attach|retain`。
   没有后台写入、没有自动执行，端点白名单之外一律拒绝。
+- 代理 `schedule/*`：定时任务面板只显示本机任务（与「插件」页只列本机插件同理），
+  远端任务不进场，也就没有跨机改期/删除这回事。
