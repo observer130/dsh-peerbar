@@ -168,9 +168,10 @@ try {
           name: host.name,
           status: typeof host.status === 'string' ? host.status : null,
           cached: Array.isArray(host.workspaces) ? host.workspaces.length : 0,
+          // 侧栏里有没有主机行：登记着、没被停用就一定画——离线且零缓存也要留标签
+          // （重启后缓存过期，曾经整行消失过）。
+          hasRow: host.enabled !== false,
         }))
-        // 侧栏里有没有主机行：在线一定有；离线只在有缓存工作区时才有（没缓存无从画标签）
-        .map((host) => ({ ...host, hasRow: host.status === 'online' || host.cached > 0 }))
     } catch {
       return []
     }
@@ -369,7 +370,7 @@ try {
   if (tree.shadowRows > 0) problems.push(`仍出现影子树行（.dshp-sessionRow × ${tree.shadowRows}），说明没有走官方侧栏`)
   const expectedHostRows = hosts.filter((host) => host.hasRow).length + 1
   if (hostRows.length !== expectedHostRows) {
-    problems.push(`主机行应为「本机 + ${expectedHostRows - 1} 台」（离线且无缓存的主机不画行），实际 ${hostRows.length} 行（${hostRows.map((row) => row.text).join('、')}）`)
+    problems.push(`主机行应为「本机 + ${expectedHostRows - 1} 台」（已停用的主机不画行），实际 ${hostRows.length} 行（${hostRows.map((row) => row.text).join('、')}）`)
   }
   if (hostRows[0]?.text !== '本机') problems.push('主机行第一行不是「本机」')
   if (workspaceRowsAtLoad.length > 0) {
