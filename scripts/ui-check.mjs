@@ -163,13 +163,24 @@ try {
       const payload = await response.json()
       return (payload?.hosts ?? [])
         .filter((host) => typeof host?.hostId === 'string' && typeof host?.name === 'string' && host.name)
-        .map((host) => ({ hostId: host.hostId, name: host.name }))
+        .map((host) => ({
+          hostId: host.hostId,
+          name: host.name,
+          status: typeof host.status === 'string' ? host.status : null,
+          cached: Array.isArray(host.workspaces) ? host.workspaces.length : 0,
+        }))
+        // 侧栏里有没有主机行：在线一定有；离线只在有缓存工作区时才有（没缓存无从画标签）
+        .map((host) => ({ ...host, hasRow: host.status === 'online' || host.cached > 0 }))
     } catch {
       return []
     }
   })
   const hostNames = hosts.map((host) => host.name)
   if (hostNames.length === 0) problems.push('没有读到任何 Host（/state.hosts 为空）')
+  // 离线主机侧栏只剩主机名标签（不能展开）；远端会话相关断言只能挑在线的那台。
+  const onlineHostNames = hosts.filter((host) => host.status === 'online').map((host) => host.name)
+  const offlineHosts = hosts.filter((host) => host.status !== 'online' && host.hasRow)
+  if (onlineHostNames.length === 0) problems.push('没有一台在线 Host，远端会话路径没法验证（先把一台恢复在线）')
 
   const readTree = () =>
     page.evaluate(async (hostList) => {
@@ -285,7 +296,7 @@ try {
       add: entries.some((entry) => entry.role === 'menuitem' && entry.text === '添加工作区'),
       hosts: names,
     }
-  }, ['本机', ...hostNames])
+  }, ['本机', ...onlineHostNames])
   first.picker = picker
   await page.screenshot({ path: path.join(OUT, 'ui-0c-picker.png') })
   let pickerAdd = null
@@ -356,8 +367,9 @@ try {
   }
 
   if (tree.shadowRows > 0) problems.push(`仍出现影子树行（.dshp-sessionRow × ${tree.shadowRows}），说明没有走官方侧栏`)
-  if (hostRows.length !== hostNames.length + 1) {
-    problems.push(`主机行应为「本机 + ${hostNames.length} 台」，实际 ${hostRows.length} 行（${hostRows.map((row) => row.text).join('、')}）`)
+  const expectedHostRows = hosts.filter((host) => host.hasRow).length + 1
+  if (hostRows.length !== expectedHostRows) {
+    problems.push(`主机行应为「本机 + ${expectedHostRows - 1} 台」（离线且无缓存的主机不画行），实际 ${hostRows.length} 行（${hostRows.map((row) => row.text).join('、')}）`)
   }
   if (hostRows[0]?.text !== '本机') problems.push('主机行第一行不是「本机」')
   if (workspaceRowsAtLoad.length > 0) {
@@ -379,8 +391,9 @@ try {
     if (ok) await sleep(700)
     return ok
   }
+  const expectedHostLabels = new Set(['本机', ...hosts.filter((host) => host.hasRow).map((host) => host.name)])
   for (const label of hostRowTexts) {
-    if (!(await expandHost(label))) problems.push(`侧栏没有主机行「${label}」`)
+    if (!(await expandHost(label)) && expectedHostLabels.has(label)) problems.push(`侧栏没有主机行「${label}」`)
   }
   await sleep(900)
 
@@ -402,8 +415,47 @@ try {
   if (first.childIndent.host !== '0px') problems.push(`主机行缩进应为 0px，实际 ${first.childIndent.host}`)
 
   const hostsSeen = new Set(remoteGroups.map((group) => group.hostId))
-  if (hostNames.length > 1 && hostsSeen.size < hostNames.length) {
-    problems.push(`只有 ${hostsSeen.size}/${hostNames.length} 台 Host 出现在侧栏（${[...hostsSeen].join('、')}）`)
+  if (onlineHostNames.length > 1 && hostsSeen.size < onlineHostNames.length) {
+    problems.push(`只有 ${hostsSeen.size}/${onlineHostNames.length} 台在线 Host 出现在侧栏（${[...hostsSeen].join('、')}）`)
+  }
+
+  // 离线主机：只留主机名标签——不展开子工作区、图标加斜杠、点它给「离线」提示。
+  first.offlineHosts = []
+  const hostRowState = (name) =>
+    page.evaluate((label) => {
+      const node = [...document.querySelectorAll('[data-row-key^="workspace:"]')].find(
+        (row) => (row.innerText ?? '').replace(/\s+/g, ' ').trim() === label,
+      )
+      if (!node) return null
+      const span = node.querySelector('span')
+      const after = span ? getComputedStyle(span, '::after') : null
+      const image = after ? after.maskImage || after.webkitMaskImage || '' : ''
+      return { slash: /y1='19\.5'/.test(image), color: getComputedStyle(node).color }
+    }, name)
+  for (const host of offlineHosts) {
+    const children = expandedTree.groups.filter((group) => !isHostRow(group) && group.hostId === host.hostId)
+    const icon = await hostRowState(host.name)
+    first.offlineHosts.push({ name: host.name, status: host.status, children: children.map((g) => g.text), icon })
+    if (children.length > 0) {
+      problems.push(`离线主机「${host.name}」仍展开了 ${children.length} 个工作区行（应只剩主机名标签）`)
+    }
+    if (!icon) problems.push(`侧栏找不到离线主机行「${host.name}」`)
+    else if (!icon.slash) problems.push(`离线主机「${host.name}」的图标没有断线斜杠`)
+  }
+  if (offlineHosts.length > 0) {
+    const probe = offlineHosts[0]
+    await page.evaluate((label) => {
+      const node = [...document.querySelectorAll('[data-row-key^="workspace:"]')].find(
+        (row) => (row.innerText ?? '').replace(/\s+/g, ' ').trim() === label,
+      )
+      node?.click()
+    }, probe.name)
+    await sleep(900)
+    const notice = await page.evaluate(() => document.getElementById('dshp-notice')?.textContent ?? null)
+    const childrenAfter = (await readTree()).groups.filter((group) => !isHostRow(group) && group.hostId === probe.hostId)
+    first.offlineClick = { host: probe.name, notice, children: childrenAfter.length }
+    if (!/离线/.test(notice ?? '')) problems.push(`点离线主机「${probe.name}」没有「离线」提示（notice=${notice}）`)
+    if (childrenAfter.length > 0) problems.push(`点离线主机「${probe.name}」后冒出了工作区行`)
   }
 
   // 主机行不是真工作区：悬停的「新建会话」必须被拦下（给提示、不建会话）
@@ -417,7 +469,7 @@ try {
     const sessionsBefore = document.querySelectorAll('[data-row-key^="session:"]').length
     button?.click()
     return { found: Boolean(button), sessionsBefore }
-  }, hostNames[0])
+  }, onlineHostNames[0])
   await sleep(1500)
   const hostCreateAfter = await page.evaluate(() => ({
     sessions: document.querySelectorAll('[data-row-key^="session:"]').length,
@@ -741,6 +793,29 @@ try {
         await sleep(4000)
         await page.screenshot({ path: path.join(OUT, 'ui-5-remote-prompt.png') })
 
+        // 等第一条回复彻底结束再发「停止」用例。否则第二条会排在队列里：点停止
+        // 只停掉第一轮，队列里的 bash 任务接着开跑，running 20s 不归零（假失败）。
+        const readRunning = () =>
+          page.evaluate(async (hostId) => {
+            const payload = await fetch('/dsh-peerbar/api/state', { credentials: 'same-origin' }).then((response) => response.json())
+            const host = (payload?.hosts ?? []).find((item) => item.hostId === hostId)
+            const running = []
+            for (const workspace of host?.workspaces ?? []) {
+              for (const session of workspace.sessions ?? []) {
+                if (session.running === true) running.push(session.rawId ?? session.id)
+              }
+            }
+            return running
+          }, /^workspace:peerbar:([^:]+):ws:/.exec(firstRemoteKey)?.[1] ?? '')
+        const firstTurnIdle = await until('第一条回复结束', async () => (await readRunning()).length === 0, 60000).catch(
+          () => false,
+        )
+        first.firstTurnSettled = Boolean(firstTurnIdle)
+        if (!firstTurnIdle) {
+          first.firstTurnRunning = await readRunning().catch(() => [])
+          problems.push(`第一条回复 60s 没结束，停止用例可能测到队列里的下一轮（running: ${JSON.stringify(first.firstTurnRunning)}）`)
+        }
+
         // 停止按钮：官方 `conversation.cancel()` 先 `sessions.scopeOf(this.ctx)` 解析
         // 会话作用域，再 `binding(id).session.cancel()`。远端 binding 没有作用域时这句
         // 抛错，而官方 `stop(sessionId)` 把它 `.catch(() => {})` 吞掉——表现是「点停止
@@ -787,23 +862,14 @@ try {
             problems.push(`点「停止」后没有发出 session/cancel（RPC 记录：${JSON.stringify(rpcCalls.slice(-4))}）`)
           }
           // 停止后远端 running 必须归零（/state 是宿主半的权威快照）
-          const stopped = await until(
-            '停止后远端 running 归零',
-            () =>
-              page.evaluate(async (hostId) => {
-                const payload = await fetch('/dsh-peerbar/api/state', { credentials: 'same-origin' }).then((response) => response.json())
-                const host = (payload?.hosts ?? []).find((item) => item.hostId === hostId)
-                for (const workspace of host?.workspaces ?? []) {
-                  for (const session of workspace.sessions ?? []) {
-                    if (session.running === true) return false
-                  }
-                }
-                return true
-              }, /^workspace:peerbar:([^:]+):ws:/.exec(firstRemoteKey)?.[1] ?? ''),
-            20000,
-          ).catch(() => false)
+          const stopped = await until('停止后远端 running 归零', async () => (await readRunning()).length === 0, 20000).catch(
+            () => false,
+          )
           first.stopSettled = Boolean(stopped)
-          if (!stopped) problems.push('点「停止」后远端仍有会话处于 running')
+          if (!stopped) {
+            first.stopStillRunning = await readRunning().catch(() => [])
+            problems.push(`点「停止」后远端仍有会话处于 running（${JSON.stringify(first.stopStillRunning)}）`)
+          }
           await sleep(600)
           await page.screenshot({ path: path.join(OUT, 'ui-5b-remote-stopped.png') })
         }
