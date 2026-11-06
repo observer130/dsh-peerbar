@@ -458,31 +458,82 @@ try {
     if (childrenAfter.length > 0) problems.push(`点离线主机「${probe.name}」后冒出了工作区行`)
   }
 
-  // 主机行不是真工作区：悬停的「新建会话」必须被拦下（给提示、不建会话）
-  const hostCreate = await page.evaluate((label) => {
-    const row = [...document.querySelectorAll('[data-row-key^="workspace:"]')].find(
-      (node) => (node.innerText ?? '').replace(/\s+/g, ' ').trim() === label,
-    )
-    if (!row) return null
-    row.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
-    const button = [...row.querySelectorAll('button')].find((node) => (node.getAttribute('aria-label') ?? '').includes('新建会话'))
-    const sessionsBefore = document.querySelectorAll('[data-row-key^="session:"]').length
-    button?.click()
-    return { found: Boolean(button), sessionsBefore }
-  }, onlineHostNames[0])
-  await sleep(1500)
-  const hostCreateAfter = await page.evaluate(() => ({
-    sessions: document.querySelectorAll('[data-row-key^="session:"]').length,
-    notice: document.getElementById('dshp-notice')?.textContent ?? null,
-  }))
-  first.hostCreateBlocked = { ...hostCreate, ...hostCreateAfter }
-  if (!hostCreate?.found) problems.push('主机行上没有「新建会话」按钮（官方行结构变了？）')
-  if (hostCreate?.found && hostCreateAfter.sessions !== hostCreate.sessionsBefore) {
-    problems.push('点主机行的「新建会话」真的建了会话（应被拦下）')
+  // 主机行不是真工作区：hover 出来的「…」菜单（重命名 / 在文件夹中显示 / 删除）
+  // 和「新会话」都不该渲染，右键也不该弹菜单。
+  //
+  // 这里不靠 hover 判断：headless Chrome 报 (hover: none)，官方那条
+  // `@media (hover:hover){.projectRow:hover .rowActions{…}}` 根本不生效，而
+  // `@media (hover:none)` 分支又会让展开行的 .rowActions 常显——hover 相关的结果
+  // 在自动化里没有参考价值。可靠的是按钮自身的 computed display：官方从不给它
+  // 设 none，只有我们那条主机行规则会压成 none。
+  const rowActionsOf = (key) =>
+    page.evaluate((rowKey) => {
+      const row = document.querySelector(`[data-row-key="${rowKey}"]`)
+      if (!row) return null
+      const actions = [...row.querySelectorAll('span')].find((node) => /rowActions/.test(node.className))
+      return {
+        actions: actions ? getComputedStyle(actions).display : null,
+        width: actions ? Math.round(actions.getBoundingClientRect().width) : null,
+        buttons: [...row.querySelectorAll('button')].map((node) => ({
+          label: node.getAttribute('aria-label'),
+          display: getComputedStyle(node).display,
+        })),
+      }
+    }, key)
+
+  const hostRowKey = hostRows[0]?.key
+  const hostActions = hostRowKey ? await rowActionsOf(hostRowKey) : null
+  first.hostActions = hostActions
+  if (!hostActions) problems.push('找不到主机行，没法验证「…」/「新建会话」是否已隐藏')
+  else {
+    const shown = hostActions.buttons.filter((button) => button.display !== 'none')
+    if (hostActions.buttons.length === 0) problems.push('主机行上一个操作按钮都没有（官方行结构变了？）')
+    if (shown.length > 0) problems.push(`主机行仍渲染操作按钮：${JSON.stringify(shown.map((button) => button.label))}`)
+    if (hostActions.width) problems.push(`主机行的操作区仍占位 ${hostActions.width}px（标题会被挤动）`)
   }
-  if (hostCreate?.found && !/主机分组/.test(hostCreateAfter.notice ?? '')) {
-    problems.push(`点主机行建会话没有给出提示（notice=${hostCreateAfter.notice}）`)
+
+  // 反向对照：真工作区行的按钮照旧（别把规则写成全局了）
+  const workspaceRowKey = remoteGroups[0]?.key
+  const workspaceActions = workspaceRowKey ? await rowActionsOf(workspaceRowKey) : null
+  first.workspaceActions = workspaceActions
+  if (!workspaceActions) problems.push('找不到远端工作区行，没法对照工作区按钮是否还在')
+  else {
+    const shown = workspaceActions.buttons.filter((button) => button.display !== 'none')
+    if (workspaceActions.buttons.length === 0) problems.push('远端工作区行没有操作按钮（官方行结构变了？）')
+    else if (shown.length === 0) problems.push('远端工作区行的按钮也被藏了（主机行规则写宽了？）')
   }
+
+  // 右键：主机行不弹工作区菜单，真工作区行照旧弹（对照，证明检测手段有效）
+  const rightClickMenu = async (key) => {
+    await page.evaluate((rowKey) => {
+      const row = document.querySelector(`[data-row-key="${rowKey}"]`)
+      row?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 220 }))
+    }, key)
+    await sleep(600)
+    return page.evaluate(() => {
+      const menus = [...document.querySelectorAll('[role="menu"]')].filter((node) => node.getClientRects().length > 0)
+      return {
+        open: menus.length,
+        text: menus
+          .map((node) => (node.textContent ?? '').replace(/\s+/g, ' ').trim())
+          .join(' | ')
+          .slice(0, 160),
+      }
+    })
+  }
+  const hostMenu = hostRowKey ? await rightClickMenu(hostRowKey) : null
+  first.hostContextMenu = hostMenu
+  if (!hostMenu) problems.push('找不到主机行，没法验证右键菜单')
+  else if (hostMenu.open > 0) problems.push(`右键主机行仍弹出工作区菜单：${hostMenu.text}`)
+  await page.keyboard.press('Escape').catch(() => {})
+
+  const workspaceMenu = workspaceRowKey ? await rightClickMenu(workspaceRowKey) : null
+  first.workspaceContextMenu = workspaceMenu
+  if (!workspaceMenu || workspaceMenu.open === 0) {
+    problems.push('右键远端工作区行没有弹出菜单（对照失效，主机行右键的断言不可信）')
+  }
+  await page.keyboard.press('Escape').catch(() => {})
+  await sleep(400)
 
   // 回归：按目录合成、又没有正式会话的空组不该出现（用户验收时撞到的「未分组」空组）
   const emptySynthetic = await page.evaluate(async () => {
