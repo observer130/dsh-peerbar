@@ -423,6 +423,18 @@ try {
     problems.push(`只有 ${hostsSeen.size}/${onlineHostNames.length} 台在线 Host 出现在侧栏（${[...hostsSeen].join('、')}）`)
   }
 
+  // 远端「未分组」必须嵌在它所属的主机行下面（缩进 12px），不能画成顶层行：
+  // 顶层会和「本机 / nv50 / m50」同级，多台主机的同名分组也分不清来源。
+  const ungroupedRows = expandedTree.groups.filter(
+    (group) => !isHostRow(group) && group.text === '未分组' && group.hostId && group.hostId !== 'local',
+  )
+  first.ungroupedRows = ungroupedRows.map((group) => ({ host: group.host, indent: group.indent, key: group.key }))
+  for (const row of ungroupedRows) {
+    if (row.indent !== '12px') {
+      problems.push(`「未分组」没有嵌在主机行下（${row.host ?? '?'} 的缩进是 ${row.indent}）`)
+    }
+  }
+
   // 离线主机：只留主机名标签——不展开子工作区、图标加斜杠、点它给「离线」提示。
   first.offlineHosts = []
   const hostRowState = (name) =>
@@ -543,7 +555,6 @@ try {
   const emptySynthetic = await page.evaluate(async () => {
     try {
       const state = await fetch('/dsh-peerbar/api/state', { credentials: 'same-origin' }).then((response) => response.json())
-      const lines = (document.body.innerText ?? '').split('\n').map((line) => line.trim())
       const leaked = []
       for (const host of state?.hosts ?? []) {
         for (const workspace of host.workspaces ?? []) {
@@ -551,11 +562,10 @@ try {
           const formal = (workspace.sessions ?? []).filter((session) => session.archived !== true && session.blank !== true)
           if (formal.length > 0) continue
           const title = workspace.name ?? '未分组'
-          // 有 cwd 就按虚拟 id 精确查行；没有（更边缘）再退回整行文本比对。
-          const key = typeof workspace.cwd === 'string' && workspace.cwd ? `workspace:peerbar:${host.hostId}:ws:${workspace.cwd}` : null
-          const shown = key
-            ? Boolean(document.querySelector(`[data-row-key="${CSS.escape(key)}"]`))
-            : lines.includes(title)
+          // 按虚拟 workspace id 精确查行。不能退回「正文里有这个标题」：多台主机
+          // 都有「未分组」桶时，别的机器的行会让空桶误判成泄漏。
+          const key = typeof workspace.id === 'string' && workspace.id ? `workspace:${workspace.id}` : null
+          const shown = key ? Boolean(document.querySelector(`[data-row-key="${CSS.escape(key)}"]`)) : false
           if (shown) leaked.push(`${title}（${workspace.cwd ?? '无路径'}）`)
         }
       }
@@ -1652,8 +1662,26 @@ try {
     if (addHostForm.inlineFormVisible) problems.push('设置页仍保留内联的「添加」表单块')
   }
   await page.screenshot({ path: path.join(OUT, 'ui-10b-add-host.png') })
-  await page.keyboard.press('Escape')
-  await sleep(600)
+  // 关闭设置浮层：一次 Escape 只关得掉「添加主机」弹窗，设置页本身还开着。
+  // 不关就往下走，后面点会话行虽然能用 JS 点穿，但截图/正文都会被浮层盖住。
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const openDialogs = await page.evaluate(() => document.querySelectorAll('[role="dialog"]').length)
+    if (openDialogs === 0) break
+    await page.keyboard.press('Escape')
+    await sleep(400)
+    const still = await page.evaluate(() => document.querySelectorAll('[role="dialog"]').length)
+    if (still > 0) {
+      await page.evaluate(() => {
+        const dialog = document.querySelector('[role="dialog"]')
+        const close = dialog?.querySelector('button[aria-label*="关闭"], button[aria-label*="Close"]')
+        close?.click()
+      })
+      await sleep(300)
+    }
+  }
+  if (await page.evaluate(() => document.querySelectorAll('[role="dialog"]').length)) {
+    problems.push('设置浮层没有关掉（§10 开始前）')
+  }
 
   // 10 远端会话的「已编辑 N 个文件」卡片（官方 ui-deliverables）
   //    卡片用普通 fetch 读 `/api/changes.summary?sessionId=…&seq=…`，摘要只存在
@@ -1713,21 +1741,34 @@ try {
           }
           const value = message?.value
           if (message?.type !== 'item' || value?.type !== 'snapshot' || !Array.isArray(value.records)) return
-          const record = value.records.find((item) => (item?.event?.type ?? item?.type) === 'workspace/changes')
-          if (!record) return finish(null)
-          finish({ ...candidate, seq: record.event?.seq ?? record.seq ?? null })
+          const index = value.records.findIndex((item) => (item?.event?.type ?? item?.type) === 'workspace/changes')
+          if (index < 0) return finish(null)
+          const record = value.records[index]
+          finish({
+            ...candidate,
+            seq: record.event?.seq ?? record.seq ?? null,
+            // 官方对话是虚拟滚动：改动卡片只有在**靠近尾部**的那一轮才会被渲染。
+            // 记录太靠前时打开会话看不到卡片，不是转发失败。
+            recent: index >= value.records.length - 100,
+          })
         })
         socket.addEventListener('error', () => finish(null))
       })
-    for (const candidate of candidates.slice(0, 6)) {
+    let fallback = null
+    for (const candidate of candidates.slice(0, 8)) {
       const found = await probe(candidate)
-      if (found) return found
+      if (!found) continue
+      if (found.recent) return found
+      if (!fallback) fallback = found
     }
-    return null
+    return fallback
   })
 
   if (!changesFixture) {
     first.changesCard = { skipped: '远端没有带 workspace/changes 宣告的会话' }
+  } else if (changesFixture.recent === false) {
+    // 只有很靠前的改动记录：虚拟滚动不会渲染那一轮，卡片自然看不到。
+    first.changesCard = { skipped: '带改动的轮次不在会话尾部（虚拟滚动不渲染，换一条会话才能验）' }
   } else {
     const summaryProbe = await page.evaluate(async (fixture) => {
       const path = `/api/changes.summary?sessionId=${encodeURIComponent(fixture.sessionId)}&seq=${fixture.seq}`
