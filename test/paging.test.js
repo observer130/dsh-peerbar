@@ -51,3 +51,15 @@ test('buildPageRequest 忽略非法的 beforeSeq（0 / 负数 / NaN）', () => {
     assert.ok(!('turnWindow' in request))
   }
 })
+
+test('buildPageRequest：子代理会话改用父地址（裸 sessionId 会被远端拒）', () => {
+  const address = {
+    kind: 'subagent',
+    parentSessionId: 'session-p',
+    childSessionId: 'child-1',
+    mode: 'continuable',
+  }
+  const request = buildPageRequest({ sessionId: 'child-1', throughSeq: 10, limit: 20, address })
+  assert.deepEqual(request.address, address)
+  assert.equal(request.maxMessages, 20)
+})

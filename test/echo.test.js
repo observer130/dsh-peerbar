@@ -235,6 +235,9 @@ test('白名单里的每个端点都要有明确归属（回写 or 已知无需�
     'messageFeedback/list',
     'messageFeedback/put',
     'messageFeedback/delete',
+    // 后台任务终止：只影响远端那条任务的状态，由任务列表自己的流刷新，
+    // 不进侧栏工作区快照（名册/输出走 /api/jobs 的 WS 代理，不在白名单）。
+    'job/kill',
   ])
   const unaccounted = [...RPC_ALLOWLIST].filter((endpoint) => !handled.has(endpoint) && !byDesign.has(endpoint))
   assert.deepEqual(unaccounted, [], `这些端点在 applyEchoToWorkspaces 里没有归属：${unaccounted.join(', ')}`)

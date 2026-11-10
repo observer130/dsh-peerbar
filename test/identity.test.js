@@ -6,6 +6,7 @@ import {
   hostIdFromOrigin,
   normalizeOrigin,
   parseVirtualId,
+  subagentSessions,
   virtualSessionId,
   workspaceName,
 } from '../lib/identity.js'
@@ -169,4 +170,50 @@ test('groupSessions 按传入归档集打 archived 标记（兼容 {archivedSess
     none[0].sessions.map((session) => session.archived),
     [false, false],
   )
+})
+
+test('subagentSessions：只收子代理行，带出父 id / mode / 投影值', () => {
+  const items = [
+    { sessionId: 'parent', cwd: '/a', updatedAt: 20, running: true },
+    {
+      sessionId: 'child',
+      cwd: '/a',
+      updatedAt: 30,
+      running: true,
+      origin: 'subagent',
+      parentSessionId: 'parent',
+      projections: {
+        values: {
+          title: 'Review C++ guard code quality',
+          subagent: { mode: 'continuable', label: 'Review' },
+          tokenUsage: { uncachedInputTokens: 1, outputTokens: 2, cacheReadTokens: 3, cacheWriteTokens: 4 },
+          subagentTiming: { settledMs: 0 },
+        },
+      },
+    },
+  ]
+  const rows = subagentSessions('h_1', items)
+  assert.equal(rows.length, 1)
+  const row = rows[0]
+  assert.equal(row.rawId, 'child')
+  assert.equal(row.id, virtualSessionId('h_1', 'child'))
+  assert.equal(row.parentId, 'parent')
+  assert.equal(row.mode, 'continuable')
+  assert.equal(row.title, 'Review C++ guard code quality')
+  assert.equal(row.running, true)
+  assert.equal(row.lastActivityAt, 30)
+  assert.equal(row.projectionValues.tokenUsage.cacheWriteTokens, 4)
+})
+
+test('subagentSessions：缺 mode 退回 unknown，缺父 id / 缺 sessionId 的行丢掉', () => {
+  const rows = subagentSessions('h_1', [
+    { sessionId: 'child', origin: 'subagent', parentSessionId: 'p' },
+    { sessionId: 'orphan', origin: 'subagent' },
+    { origin: 'subagent', parentSessionId: 'p' },
+    null,
+    'not-an-item',
+  ])
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].mode, 'unknown')
+  assert.equal(rows[0].title, null)
 })

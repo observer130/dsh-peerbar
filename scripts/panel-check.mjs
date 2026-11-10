@@ -246,6 +246,112 @@ try {
     if (listed.length === 0) problems.push('「自动化任务」页没有列出本机任务')
   }
 
+  // 子代理目录 + 后台任务：远端会话标题栏的「N 个子智能体」必须像原生一样
+  // 给出标题/用量/耗时，点一行要能打开子会话；「N 个后台任务」也要在。
+  const subFixture = await page.evaluate(async () => {
+    const state = await (await fetch('/dsh-peerbar/api/state', { credentials: 'same-origin' })).json()
+    for (const host of state.hosts ?? []) {
+      if (host.status !== 'online') continue
+      const byParent = new Map()
+      for (const child of host.subagents ?? []) {
+        if (!byParent.has(child.parentId)) byParent.set(child.parentId, [])
+        byParent.get(child.parentId).push(child)
+      }
+      for (const [parentId, children] of byParent) {
+        const inWorkspace = (host.workspaces ?? []).some((workspace) =>
+          (workspace.sessions ?? []).some((session) => session.rawId === parentId && session.archived !== true),
+        )
+        if (!inWorkspace) continue
+        return { hostId: host.hostId, hostName: host.name, parentId, children: children.map((c) => c.rawId) }
+      }
+    }
+    return null
+  })
+  if (!subFixture) {
+    result.subagents = { skipped: true, reason: '当前没有「子会话在侧栏可见」的远端主机数据' }
+  } else {
+    for (let pass = 0; pass < 3; pass += 1) {
+      await page.evaluate(() => {
+        for (const row of document.querySelectorAll('[data-row-key^="workspace:"]')) {
+          if (row.getAttribute('aria-expanded') !== 'true') row.click()
+        }
+      })
+      await new Promise((resolve) => setTimeout(resolve, 600))
+    }
+    const opened = await page.evaluate((parentId) => {
+      const row = document.querySelector(`[data-row-key="session:${parentId}"]`)
+      row?.click()
+      return Boolean(row)
+    }, subFixture.parentId)
+    const chip = opened
+      ? await (async () => {
+          for (let i = 0; i < 40; i += 1) {
+            const text = await page.evaluate(() =>
+              [...document.querySelectorAll('button,[role="button"]')]
+                .map((node) => (node.innerText ?? '').replace(/\s+/g, ' ').trim())
+                .find((value) => /个子智能体/.test(value)) ?? null,
+            )
+            if (text) return text
+            await new Promise((resolve) => setTimeout(resolve, 500))
+          }
+          return null
+        })()
+      : null
+    if (!opened) {
+      result.subagents = { skipped: true, reason: '父会话在侧栏里点不到（可能被折叠或被过滤）' }
+    } else if (!chip) {
+      result.subagents = { host: subFixture.hostName, opened: true, chip: null }
+      problems.push('打开带子代理的远端会话后，标题栏没有「N 个子智能体」')
+    } else {
+      await page.evaluate(() => {
+        [...document.querySelectorAll('button,[role="button"]')]
+          .find((node) => /个子智能体/.test((node.innerText ?? '').replace(/\s+/g, ' ')))?.click()
+      })
+      await new Promise((resolve) => setTimeout(resolve, 1200))
+      // 只取官方子代理目录那个 tree（`aria-label="子智能体会话"`），
+      // 别把侧栏的工作区/会话行混进来。
+      const popoverRows = await page.evaluate(() =>
+        [...document.querySelectorAll('[role="tree"][aria-label="子智能体会话"] [role="treeitem"]')]
+          .map((node) => (node.getAttribute('aria-label') ?? '').replace(/\s+/g, ' ').trim()),
+      )
+      const jobChip = await page.evaluate(() =>
+        [...document.querySelectorAll('button,[role="button"]')]
+          .map((node) => (node.innerText ?? '').replace(/\s+/g, ' ').trim())
+          .find((value) => /个后台任务/.test(value)) ?? null,
+      )
+      await page.screenshot({ path: path.join(OUT, 'panel-subagents.png') })
+      const texts = popoverRows
+      if (texts.length === 0) problems.push('子代理目录里没有任何行')
+      for (const text of texts) {
+        if (!/tok/.test(text)) problems.push(`子代理行缺少 token 用量：${text.slice(0, 80)}`)
+        if (!/可继续|单次|未知/.test(text)) problems.push(`子代理行缺少模式文案：${text.slice(0, 80)}`)
+      }
+      let childOpened = null
+      if (texts.length > 0) {
+        const before = await page.evaluate(() => document.title)
+        await page.evaluate(() => {
+          const target = document.querySelector('[role="tree"][aria-label="子智能体会话"] [role="treeitem"]')
+          target?.click()
+        })
+        await new Promise((resolve) => setTimeout(resolve, 3500))
+        childOpened = await page.evaluate((previous) => ({
+          title: document.title,
+          changed: document.title !== previous,
+          breadcrumb: [...document.querySelectorAll('[class*="crumb"]')].map((node) => (node.textContent ?? '').trim()).join(' / '),
+        }), before)
+      }
+      result.subagents = {
+        host: subFixture.hostName,
+        chip,
+        jobChip,
+        rows: texts.map((text) => text.slice(0, 160)),
+        childOpened,
+      }
+      if (childOpened && !childOpened.changed) problems.push('点子代理行后没有打开子会话（标题没变）')
+      await page.screenshot({ path: path.join(OUT, 'panel-subagents-child.png') })
+    }
+  }
+
   result.consoleErrors = consoleErrors
   if (consoleErrors.length) problems.push(`页面报错 ${consoleErrors.length} 条`)
   result.problems = problems

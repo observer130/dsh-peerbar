@@ -75,6 +75,7 @@ lib/stream.js    Remote 流通道：workspace/follow 归档集、workspaceFiles/
                  双工 terminal/attach（send/close）、session/control 控制流、session/follow 历史流
 lib/control.js   session/control 单向 WS 桥（计划/提问投影）
 lib/follow.js    session/follow 单向 WS 桥（计划预览的 opening snapshot）
+lib/jobs.js      job/list + job/follow 单向 WS 桥（后台任务名册/输出，只读）
 lib/terminal.js  远端终端 WS 代理：浏览器 ↔ 本机 ↔ 远端 mux，端点白名单 + 帧转发
 lib/probe.js     探活状态机与退避
 lib/peers.js     每 Host 的快照编排、调度与缓存
@@ -141,6 +142,7 @@ DSH_HOME="$PWD/.workbuddy/dsh-home" DSH_TEST_PORT=3103 scripts/dev-server.sh
 node scripts/ui-check.mjs --quick   # 日常：不建会话、不发消息、不调真模型（约 40s）
 node scripts/ui-check.mjs           # 发布前全量：远端新建会话 + 真模型回复 + 计划预览（≤180s）
 node scripts/panel-check.mjs        # 派生面板：远端文档预览 + 自动化任务页（只读本机任务）
+                                    # + 子代理目录（标题/用量/耗时、点开子会话）
 ```
 
 - 测试 profile 需要登录态/远端凭据时，从 `~/.dsh` 复制 `.credentials.yaml`、
@@ -181,5 +183,7 @@ node scripts/panel-check.mjs        # 派生面板：远端文档预览 + 自动
 - 任何跨机写操作——**只有用户显式触发时例外**：
   - 终端：亲手打开右侧栏终端标签，经 `lib/terminal.js` 代理 `terminal/attach|retain`。
   没有后台写入、没有自动执行，端点白名单之外一律拒绝。
+  - 后台任务终止：用户在任务列表里亲手点「终止」，经 `/hosts/<id>/rpc` 的 `job/kill` 放行；
+    名册与输出（`job/list` / `job/follow`）是只读流，走 `lib/jobs.js`。
 - 代理 `schedule/*`：定时任务面板只显示本机任务（与「插件」页只列本机插件同理），
   远端任务不进场，也就没有跨机改期/删除这回事。
