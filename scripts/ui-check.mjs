@@ -1571,6 +1571,10 @@ try {
       addButtons: [...panel.querySelectorAll('button')].filter((node) => (node.innerText ?? '').trim() === '添加').length,
       // build 号页脚已移除；「添加」跟最后一张卡片的下方、左边缘对齐
       hasBuildText: /build\s+\d{4}-/.test(text),
+      // 凭据文案已按用户反馈整体移除：只留 红/绿/黄 状态点 + 在线/离线/需要令牌 徽标
+      credentialText: /凭据|cookie/i.test(text),
+      // 旧版还有个 title="cookie ✓" 的调试悬浮文案，属性值不在 innerText 里，单独查
+      credentialTitle: [...panel.querySelectorAll('[title]')].some((node) => /cookie|凭据/i.test(node.getAttribute('title') ?? '')),
       addBelowCards: (() => {
         const add = [...panel.querySelectorAll('button')].find((node) => (node.innerText ?? '').trim() === '添加')
         const cards = [...panel.querySelectorAll('.dshp-host')]
@@ -1609,6 +1613,7 @@ try {
     if (settingsPage.hasMoveButtons) problems.push('设置页主机卡片仍有「上移/下移」按钮（应移除）')
     if (settingsPage.addButtons !== 1) problems.push(`设置页「添加」按钮应只有 1 个，实际 ${settingsPage.addButtons}`)
     if (settingsPage.hasBuildText) problems.push('设置页仍显示 build 号（应移除）')
+    if (settingsPage.credentialText || settingsPage.credentialTitle) problems.push('设置页仍出现「凭据 / cookie」文案（应只留 在线/离线/需要令牌 徽标）')
     if (settingsPage.addBelowCards && !settingsPage.addBelowCards.below) {
       problems.push('「添加」按钮没有放在卡片下方')
     }
