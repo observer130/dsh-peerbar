@@ -1652,6 +1652,16 @@ try {
       fields: [...form.querySelectorAll('.dshp-field > label')].map((node) => (node.innerText ?? '').trim()),
       inputs: form.querySelectorAll('input').length,
       footer: [...scope.querySelectorAll('button')].map((node) => (node.innerText ?? '').trim()).slice(0, 8),
+      // 「跳过证书校验」那行以前继承对话框的 14px，比旁边 12px 的字段标签大一号
+      checkFont: (() => {
+        const label = form.querySelector('.dshp-check')
+        if (!label) return null
+        const fieldLabel = form.querySelector('.dshp-field > label')
+        return {
+          check: parseFloat(getComputedStyle(label).fontSize),
+          field: fieldLabel ? parseFloat(getComputedStyle(fieldLabel).fontSize) : null,
+        }
+      })(),
       // 页面主体不应该还留着旧的内联表单
       inlineFormVisible: Boolean(document.querySelector('.dshp-set > form')),
     }
@@ -1665,6 +1675,13 @@ try {
     }
     if (!addHostForm.footer.includes('添加')) problems.push(`登记窗口底部没有「添加」按钮（${addHostForm.footer.join('/')}）`)
     if (addHostForm.inlineFormVisible) problems.push('设置页仍保留内联的「添加」表单块')
+    if (addHostForm.checkFont) {
+      const { check, field } = addHostForm.checkFont
+      if (!(check <= 12.5)) problems.push(`「跳过证书校验」字号 ${check}px 偏大（应与字段标签同为 12px）`)
+      if (field !== null && Math.abs(check - field) > 0.5) {
+        problems.push(`「跳过证书校验」字号 ${check}px 与字段标签 ${field}px 不一致`)
+      }
+    }
   }
   await page.screenshot({ path: path.join(OUT, 'ui-10b-add-host.png') })
   // 关闭设置浮层：一次 Escape 只关得掉「添加主机」弹窗，设置页本身还开着。
