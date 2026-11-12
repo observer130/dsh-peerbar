@@ -762,7 +762,31 @@ try {
     first.openedBodyTail = opened.body.slice(-400)
     if (!opened.composer) problems.push('远端会话打开后没有 composer')
 
-
+    // 标题栏的「xx 模式」：官方 AgentPresetLabel 读
+    // `sessions.byId[id].projectionValues.agentPreset`。远端行的投影值必须
+    // 同时挂到行上（只写 projectionsBySession 不够），否则标签静默消失。
+    if (targetSession.hostId) {
+      const preset = await page.evaluate(
+        async ([hostId, rawId]) => {
+          const response = await fetch(`/dsh-peerbar/api/hosts/${encodeURIComponent(hostId)}/rpc`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json', 'x-dsh-peerbar-action': '1' },
+            body: JSON.stringify({ endpoint: 'session/projections', args: { request: { sessionId: rawId } } }),
+          })
+          const payload = await response.json().catch(() => null)
+          return typeof payload?.value?.values?.agentPreset === 'string' ? payload.value.values.agentPreset : null
+        },
+        [targetSession.hostId, targetSession.key.replace(/^session:/, '')],
+      ).catch(() => null)
+      first.agentPreset = preset
+      if (preset === 'standard') {
+        const visible = await page.evaluate(() => (document.body.innerText ?? '').includes('标准模式'))
+        first.agentPresetVisible = visible
+        if (!visible) problems.push('远端会话标题栏没有渲染「标准模式」（投影值没挂到会话行上）')
+      }
+    }
+    await page.screenshot({ path: path.join(OUT, 'ui-3-remote-session.png') })
 
     // ---- 3b) 远端工作区里点「新会话」：应像本机一样回到起始页 ----
     // 远端空白会话也要让官方看见 blank=true，否则中栏直接落进一个空对话，
