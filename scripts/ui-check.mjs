@@ -743,8 +743,11 @@ try {
     if (!sessionOpened) problems.push('点开远端会话后中栏没有切到会话视图（20s）')
     const hydrated = await until(
       '远端会话正文',
-      // CSS Module 类名带语义前缀（`_markdown_1ypvv_5`），比构建期哈希稳定
-      () => page.evaluate(() => document.querySelectorAll('[class*="markdown" i]').length > 0),
+      // CSS Module 类名带语义前缀（`_markdown_1ypvv_5`），比构建期哈希稳定。
+      // 纯文本会话（例如只发了一句「回复 OK」）没有 markdown 节点，消息气泡也算数。
+      () => page.evaluate(
+        () => document.querySelectorAll('[class*="markdown" i], [class*="message" i]').length > 0,
+      ),
       20000,
     ).catch(() => false)
     first.sessionHydrated = hydrated
@@ -758,7 +761,35 @@ try {
     first.openedBodyLength = opened.bodyLength
     first.openedBodyTail = opened.body.slice(-400)
     if (!opened.composer) problems.push('远端会话打开后没有 composer')
-    await page.screenshot({ path: path.join(OUT, 'ui-3-remote-session.png') })
+
+
+
+    // ---- 3b) 远端工作区里点「新会话」：应像本机一样回到起始页 ----
+    // 远端空白会话也要让官方看见 blank=true，否则中栏直接落进一个空对话，
+    // 用户会以为「新会话」没有生效（远端会话的 blank 以前被强行置 false）。
+    const clickedNew = await page.evaluate(() => {
+      const button = [...document.querySelectorAll('button')].find((node) => (node.innerText ?? '').replace(/\s+/g, '') === '新会话')
+      if (!button) return false
+      button.click()
+      return true
+    })
+    first.newSessionClicked = clickedNew
+    if (!clickedNew) problems.push('侧栏找不到「新会话」按钮')
+    if (clickedNew) {
+      const hero = await until(
+        '远端工作区的新会话回到起始页',
+        () => page.evaluate(() => document.querySelector('[data-phase]')?.getAttribute('data-phase') === 'hero'),
+        15000,
+      ).catch(() => false)
+      const heroText = await page.evaluate(() => (document.body.innerText ?? '').includes('探索未至之境'))
+      first.newSessionHero = { hero, heroText }
+      if (!hero) problems.push('在远端工作区点「新会话」后没有回到起始页（中栏仍是空对话）')
+      if (!heroText) problems.push('远端工作区的新会话没有渲染起始页（缺「探索未至之境」）')
+      await page.screenshot({ path: path.join(OUT, 'ui-3b-new-session-hero.png') })
+      // 回到原会话，后面的章节照旧
+      await page.evaluate((key) => document.querySelector(`[data-row-key="${key}"]`)?.click(), targetSession.key)
+      await sleep(2500)
+    }
   }
 
   // ---- 4) 本机会话没有回归：展开本机组，点它新出现的会话行 ----
@@ -828,13 +859,22 @@ try {
       }
       await page.screenshot({ path: path.join(OUT, 'ui-4-remote-new.png') })
 
-      // 会话视图起来 + composer 可写
+      // 会话视图起来 + composer 可写。刚建的远端会话是空白会话：官方中栏
+      // 会停在起始页（hero），此时没有「轨迹」页签——这和本机新会话一致，
+      // 不能拿页签当唯一判据。
       const viewReady = await until(
         '新会话视图',
-        () => page.evaluate(() => /轨迹/.test(document.body.innerText ?? '')),
+        () =>
+          page.evaluate(() => {
+            const phase = document.querySelector('[data-phase]')?.getAttribute('data-phase')
+            return phase === 'hero' || /轨迹/.test(document.body.innerText ?? '')
+          }),
         15000,
       ).catch(() => false)
-      if (!viewReady) problems.push('远端新会话没有在中栏打开')
+      first.newSessionPhase = await page
+        .evaluate(() => document.querySelector('[data-phase]')?.getAttribute('data-phase') ?? null)
+        .catch(() => null)
+      if (!viewReady) problems.push('远端新会话没有在中栏打开（既没有起始页也没有会话页签）')
 
       const box = await page.$('textarea, [contenteditable="true"]')
       if (!box) {
@@ -1504,12 +1544,40 @@ try {
   first.groupingOff = { flag: flat.flag, rowCount: flat.rows.length, hostRows: flatHostRows.map((row) => row.text) }
   if (flat.flag !== '0') problems.push(`切到「按工作区」后分组标记没有自动写回关（flag=${flat.flag}）`)
   if (flatHostRows.length > 0) problems.push(`平铺后仍出现主机行：${flatHostRows.map((row) => row.text).join('、')}`)
-  const expectedFlat = (first.localGroups?.length ?? 0) + (first.remoteGroups?.length ?? 0)
-  if (expectedFlat > 0 && flat.rows.length !== expectedFlat) {
-    problems.push(`平铺行数应为 ${expectedFlat}，实际 ${flat.rows.length}`)
+  // 期望值不能拿 §1 抓的 localGroups/remoteGroups：官方侧栏是虚拟列表，
+  // 那时滚到屏幕外的组没进 DOM，而且远端工作区可能在自检过程中新增/消失。
+  // 改成和 /state 对账，但按客户端同一条「可见」规则过滤：注册工作区全画；
+  // 「未分组」桶只有存在可见会话（未归档且非空白）时才画。
+  const stateWorkspaceCount = await page.evaluate(async () => {
+    try {
+      const state = await (await fetch('/dsh-peerbar/api/state', { credentials: 'same-origin' })).json()
+      let count = 0
+      for (const host of state?.hosts ?? []) {
+        if (host.status !== 'online') continue
+        for (const workspace of host.workspaces ?? []) {
+          if (typeof workspace.workspaceId === 'string' && workspace.workspaceId !== '') {
+            count += 1
+            continue
+          }
+          const visible = (workspace.sessions ?? []).some(
+            (session) => session.archived !== true && session.blank !== true,
+          )
+          if (visible) count += 1
+        }
+      }
+      return count
+    } catch {
+      return null
+    }
+  })
+  const flatRemoteAll = flat.rows.filter((row) => /^workspace:peerbar:[^:]+:ws:/.test(row.key) && !/:local:/.test(row.key))
+  first.flatCounts = { rows: flat.rows.length, remote: flatRemoteAll.length, stateRemote: stateWorkspaceCount }
+  if (typeof stateWorkspaceCount === 'number' && flatRemoteAll.length !== stateWorkspaceCount) {
+    problems.push(`平铺后远端工作区行应为 ${stateWorkspaceCount}，实际 ${flatRemoteAll.length}`)
   }
+  if (flat.rows.length <= flatRemoteAll.length) problems.push('平铺后没有出现本机工作区行')
   // 平铺时远端工作区标题要带「· 主机名」：没有主机行，后缀是唯一来源
-  const flatRemote = flat.rows.filter((row) => /^workspace:peerbar:[^:]+:ws:/.test(row.key) && !/:local:/.test(row.key))
+  const flatRemote = flatRemoteAll
   const flatMissingSuffix = flatRemote.filter((row) => !hostNames.some((name) => row.text.endsWith(` · ${name}`)))
   first.flatSuffix = { remote: flatRemote.length, missing: flatMissingSuffix.map((row) => row.text) }
   if (flatRemote.length > 0 && flatMissingSuffix.length > 0) {
