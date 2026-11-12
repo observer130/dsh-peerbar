@@ -1271,6 +1271,21 @@ try {
       return null
     }, candidates)
     first.remoteAddWorkspace = { target }
+    // 登记前的工作区集合：万一对话框把别的目录登记了（历史 bug），清理能兜住。
+    const workspacesBefore = await page.evaluate(async () => {
+      try {
+        const state = await (await fetch('/dsh-peerbar/api/state', { credentials: 'same-origin' })).json()
+        const map = {}
+        for (const host of state?.hosts ?? []) {
+          map[host.hostId] = (host.workspaces ?? [])
+            .filter((workspace) => typeof workspace.workspaceId === 'string' && workspace.workspaceId)
+            .map((workspace) => ({ workspaceId: workspace.workspaceId, cwd: workspace.cwd }))
+        }
+        return map
+      } catch {
+        return {}
+      }
+    })
 
     const findWorkspace = () =>
       page.evaluate(async ({ hostId, path }) => {
@@ -1287,9 +1302,48 @@ try {
           : null
       }, target)
 
+    /**
+     * 清理这次自检登记的远端工作区。
+     *
+     * 除了目标路径，还要收拾「意外多出来的」：旧版对话框会拿已列出目录去登记
+     * （输入 /tmp 却创建了 /home/nwj），只按 cwd 找目标会漏掉它，让远端留下
+     * 一条工作区登记（还会改变侧栏的目录层级）。
+     */
     const remove = async () => {
       const found = await findWorkspace().catch(() => null)
-      if (!found?.workspaceId) return { ok: true, skipped: '没有登记（无需清理）' }
+      const extra = await page.evaluate(async (before) => {
+        try {
+          const state = await (await fetch('/dsh-peerbar/api/state', { credentials: 'same-origin' })).json()
+          const removed = []
+          for (const host of state?.hosts ?? []) {
+            const known = new Set((before[host.hostId] ?? []).map((workspace) => workspace.workspaceId))
+            for (const workspace of host.workspaces ?? []) {
+              if (typeof workspace.workspaceId !== 'string' || !workspace.workspaceId) continue
+              if (known.has(workspace.workspaceId)) continue
+              if (workspace.cwd === '/tmp' || workspace.cwd === '/home/nwj/peerbar-ui-check') {
+                removed.push({ cwd: workspace.cwd, skipped: '由目标清理处理' })
+                continue
+              }
+              const response = await fetch(`/dsh-peerbar/api/hosts/${encodeURIComponent(host.hostId)}/rpc`, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'content-type': 'application/json', 'x-dsh-peerbar-action': '1' },
+                body: JSON.stringify({ endpoint: 'workspace/delete', args: { request: { workspaceId: workspace.workspaceId } } }),
+              })
+              const payload = await response.json().catch(() => null)
+              removed.push({ cwd: workspace.cwd, ok: response.ok && payload?.ok !== false })
+            }
+          }
+          return removed
+        } catch {
+          return []
+        }
+      }, workspacesBefore).catch(() => [])
+      const stray = (extra ?? []).filter((entry) => entry.skipped === undefined)
+      if (stray.length > 0) {
+        problems.push(`自检意外登记了其它目录并已清理：${stray.map((entry) => entry.cwd).join('、')}`)
+      }
+      if (!found?.workspaceId) return { ok: true, skipped: '没有登记（无需清理）', stray }
       const removed = await page.evaluate(async ({ hostId, workspaceId }) => {
         const response = await fetch(`/dsh-peerbar/api/hosts/${encodeURIComponent(hostId)}/rpc`, {
           method: 'POST',
@@ -1300,7 +1354,7 @@ try {
         const payload = await response.json().catch(() => null)
         return payload?.ok === true
       }, { hostId: target.hostId, workspaceId: found.workspaceId })
-      return { ok: removed === true, workspaceId: found.workspaceId }
+      return { ok: removed === true, workspaceId: found.workspaceId, stray }
     }
 
     if (!target) {
@@ -1362,18 +1416,24 @@ try {
           input.dispatchEvent(new Event('input', { bubbles: true }))
           input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
         }, target.path)
+        // 只看 input.value 不够：值变了但目录没跳过去（回车被吞），此时点「打开」
+        // 会登记**上一个**目录（实测把 /home/nwj 当成 /tmp 注册过）。要等
+        // 列表真正落到目标路径（组件把 listing.path 写在 data-path 上）。
         const listed = await until(
           `列出 ${target.path}`,
           () =>
             page.evaluate((path) => {
               const input = document.querySelector('.dshp-pathInput')
               if (!input || input.value !== path) return null
+              if (input.dataset.path !== path) return null
               if ((document.body.innerText ?? '').includes('正在读取…')) return null
               return { path }
             }, target.path),
           20000,
         ).catch(() => null)
-        if (!listed) throw new Error(`输入路径后没有列出 ${target.path}`)
+        if (!listed) {
+          throw new Error(`输入路径后没有列出 ${target.path}（路径框的值与已列出目录不一致）`)
+        }
         // 只在对话框里找按钮：计划页签自己也有一个「打开」，先到先得会点错。
         const confirmed = await page.evaluate(() => {
           const input = document.querySelector('.dshp-pathInput')
