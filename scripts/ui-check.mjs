@@ -93,6 +93,16 @@ try {
     }
   })
 
+  // 桌面端的本机目录是系统对话框（Electron 预加载注入 `__DSH_DIRECTORY_PICKER__`）。
+  // 无头实例里给一个固定返回，才能走到「本机 → 选择目录…」的真实分支，
+  // 覆盖 `createWorkspace({path})` 的调用形状（曾把 path 包了两层，
+  // 远端回 `wire field "request" failed boundary validation`）。
+  const LOCAL_PICK_DIR = path.join(OUT, 'ui-local-ws')
+  fs.mkdirSync(LOCAL_PICK_DIR, { recursive: true })
+  await page.evaluateOnNewDocument((dir) => {
+    window.__DSH_DIRECTORY_PICKER__ = { pick: async () => dir }
+  }, LOCAL_PICK_DIR)
+
   const consoleErrors = []
   page.on('console', (message) => {
     if (message.type() === 'error') consoleErrors.push(message.text())
@@ -101,6 +111,17 @@ try {
 
   // 交付物卡片的两条按会话路由：远端会话必须走 /dsh-peerbar/api/asset 转发，
   // 直接打本机 /api/changes.* 只会 404（卡片就不出现）。§10 用这两份记录断言。
+  // 本机「添加工作区」的请求结果：桌面端走系统对话框后由官方
+  // `workspace/create` 建行，用响应判定（行可能是已有的，重复跑不会新出现）。
+  const localCreateCalls = []
+  page.on('response', (response) => {
+    if (!response.url().includes('/api/workspace/create')) return
+    response
+      .json()
+      .then((payload) => localCreateCalls.push({ status: response.status(), ok: payload?.result?.ok === true }))
+      .catch(() => localCreateCalls.push({ status: response.status(), ok: false }))
+  })
+
   const assetProxies = []
   const directChanges = []
   const rpcCalls = []
@@ -2123,6 +2144,82 @@ try {
       local: local.ids.length,
       mergedRouteStatus: mergedRoute,
       missingFromPanel: missing.length,
+    }
+  }
+
+  // ---- 12) 本机添加工作区：走新会话下拉的「添加工作区」 ----
+  // 这条路径和侧栏「+」不同：它由本插件的 picker → adoptDirectory →
+  // `createWorkspace({ path })` 完成。历史上这里把 path 又包了一层，远端
+  // 边界校验直接拒绝，表现就是「本机添加工作区失败」。
+  await page.evaluate(() => {
+    const button = [...document.querySelectorAll('button')].find((node) => (node.innerText ?? '').replace(/\s+/g, '') === '新会话')
+    button?.click()
+  })
+  const heroReady = await until(
+    '新会话起始页',
+    () => page.evaluate(() => document.querySelector('[data-phase]')?.getAttribute('data-phase') === 'hero'),
+    15000,
+  ).catch(() => false)
+  if (!heroReady) {
+    first.localAddWorkspace = { skipped: true, reason: '没回到起始页，无法打开工作区下拉' }
+  } else {
+    const openedPicker = await page.evaluate(() => {
+      const label = document.querySelector('[class*="workspaceLabel"]')
+      const button = label?.closest('button')
+      button?.click()
+      return Boolean(button)
+    })
+    await sleep(800)
+    const clickedAdd = await page.evaluate(() => {
+      const node = [...document.querySelectorAll('button,[role="menuitem"]')].find((entry) =>
+        /添加工作区/.test(entry.innerText ?? ''),
+      )
+      node?.click()
+      return Boolean(node)
+    })
+    await sleep(1000)
+    const hasNativePick = await page.evaluate(() =>
+      [...document.querySelectorAll('button')].some((node) => (node.innerText ?? '').trim() === '选择目录…'),
+    )
+    if (!openedPicker || !clickedAdd || !hasNativePick) {
+      first.localAddWorkspace = { openedPicker, clickedAdd, hasNativePick }
+      problems.push('新会话工作区下拉里打不开「添加工作区 / 选择目录…」')
+    } else {
+      const callsBefore = localCreateCalls.length
+      const beforeRowKeys = await page.evaluate(() =>
+        [...document.querySelectorAll('[data-row-key^="workspace:"]')].map((row) => row.getAttribute('data-row-key')),
+      )
+      await page.evaluate(() => {
+        const node = [...document.querySelectorAll('button')].find((entry) => (entry.innerText ?? '').trim() === '选择目录…')
+        node?.click()
+      })
+      // 目录是同一个：工作区已存在时 `workspace/create` 返回 created:false，
+      // 侧栏不会「新出现」一行——所以同时接受「已有行」与「新行」。
+      const row = await until(
+        '本机工作区出现在侧栏',
+        () =>
+          page.evaluate(
+            (seen) =>
+              [...document.querySelectorAll('[data-row-key^="workspace:"]')]
+                .map((entry) => ({
+                  key: entry.getAttribute('data-row-key'),
+                  text: (entry.innerText ?? '').replace(/\s+/g, ' ').trim(),
+                  isNew: !seen.includes(entry.getAttribute('data-row-key')),
+                }))
+                .find((entry) => entry.text.includes('ui-local-ws')) ?? null,
+            beforeRowKeys,
+          ),
+        20000,
+      ).catch(() => null)
+      const okCall = await until(
+        'workspace/create 返回成功',
+        () => localCreateCalls.slice(callsBefore).some((call) => call.ok === true),
+        20000,
+      ).catch(() => false)
+      first.localAddWorkspace = { row, ok: Boolean(okCall), calls: localCreateCalls.slice(callsBefore) }
+      if (!okCall) problems.push('本机「添加工作区」的 workspace/create 没有返回成功')
+      if (!row) problems.push('本机目录没有被添加成工作区（新会话下拉 → 添加工作区 → 选择目录…）')
+      await page.screenshot({ path: path.join(OUT, 'ui-13-local-workspace.png') })
     }
   }
 
