@@ -23,10 +23,13 @@
 
 | 项 | 值 |
 | --- | --- |
-| 宿主 | DSH Desktop `@deepseek-ai/dsh-desktop 0.2.2-rc.3`（本机唯一安装）；远端 Host 兼容 0.2.1-rc.x |
+| 宿主 | DSH Desktop（本机唯一安装）。实际版本用 `dsh --version` 现查；兼容范围只在 `package.json` 的 `engines.dsh`（`^0.2.1-rc.1`）声明。远端 Host 同为 0.2.x，0.2.1/0.2.2 的 RPC 差异已双路兼容 |
 | 自带运行时 | `/opt/dsh-desktop-linux-bin/resources/runtime` — Node 24.21.0 / pnpm 11.28.5 |
 | profile | `~/.dsh/profiles/desktop`，**由 Electron 独占**，CLI 无法管理 |
 | 限制 | agent shell 有 `ulimit -v 4GB`，不要从里面直接起 dsh 进程 |
+
+兼容性只有 `engines.dsh` 一处声明：文档不记宿主的具体版本号，常规升级（含 `-rc`）不产生文档改动，
+宿主版本现查即可。只有出现不兼容时才动这个范围，并同步引用它的那几处（README、本文件、插件规范文首）。
 
 装插件**只能走桌面版 UI**：侧栏「插件」→ 标题旁箭头 → 安装第三方插件 → 填 `/home/nwj/Projects/dsh-peerbar`。任何 `dsh plugin --profile desktop ...` 都会报 `profile "desktop" is managed exclusively by the Electron application`。
 
@@ -41,6 +44,10 @@ for f in lib/*.js; do node --check "$f" || break; done
 # 只读查看组合层（只能碰非 desktop profile）
 RT=/opt/dsh-desktop-linux-bin/resources/runtime
 export DSH_DESKTOP_NODE_EXECUTABLE=/opt/dsh-desktop-linux-bin/deepseek-harness
+
+# 宿主实际版本（兼容范围见 package.json 的 engines.dsh，文档不记死版本号）
+$RT/bin/node /opt/dsh-desktop-linux-bin/resources/app/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js --version
+
 $RT/bin/node /opt/dsh-desktop-linux-bin/resources/app/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js \
   --profile web --dump-config | grep -A4 'dsh-peerbar'
 
@@ -99,7 +106,7 @@ docs/            意图.md / 架构.md / 插件开发规范.md / 远端终端.md
    影子替换下的一堆历史坑（子座位接不回来、`renderSlot` 注入失败）只留在 `docs/archive/`。
 2. 插件自己注册的 `ctx.webServer` 路由**没有任何认证**——dsh 的浏览器 cookie 与 Host/Origin 校验只覆盖 `/api`。同源/回环 guard 必须自己写。
 3. `/api` 不是 REST：`POST /api/<namespace>/<method>` + `{ args }`，流式走 WS `/api/remote.mux`。
-   插件自己的双工通道用 `ctx.webServer.registerUpgrade`（0.2.2-alpha.3 已核实，见插件规范 §12）；
+   插件自己的双工通道用 `ctx.webServer.registerUpgrade`（已核实，证据版本见插件规范 §12）；
    反向方向本插件是 WS 服务端，服务端帧**不得加掩码**。
 4. 客户端半必须是 `window.__ModuleLoader__.load({ id, factory(require) })`，**不能出现 `import`/`export`**；`react`、`react-dom`、`@deepseek-ai/dsh-client-ui-primitives` 是 baseline external，禁止打包进自己的 bundle。
 5. 宿主半依赖用静态 `export const inject = [...]`，不要手动等 service。
