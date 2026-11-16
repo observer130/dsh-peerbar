@@ -23,7 +23,7 @@
 
 | 项 | 值 |
 | --- | --- |
-| 宿主 | DSH Desktop `@deepseek-ai/dsh-desktop 0.2.2-alpha.3`（本机唯一安装）；远端 Host 兼容 0.2.1-rc.x |
+| 宿主 | DSH Desktop `@deepseek-ai/dsh-desktop 0.2.2-rc.3`（本机唯一安装）；远端 Host 兼容 0.2.1-rc.x |
 | 自带运行时 | `/opt/dsh-desktop-linux-bin/resources/runtime` — Node 24.21.0 / pnpm 11.28.5 |
 | profile | `~/.dsh/profiles/desktop`，**由 Electron 独占**，CLI 无法管理 |
 | 限制 | agent shell 有 `ulimit -v 4GB`，不要从里面直接起 dsh 进程 |
