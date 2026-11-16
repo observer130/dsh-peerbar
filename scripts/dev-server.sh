@@ -44,4 +44,9 @@ else
 fi
 
 cd "$ROOT"
+# 自检用 shim（假 code / xdg-open）：只在显式开启时进 PATH，避免影响日常开发。
+# ui-check 用它验证宿主半是否把 vscode:// 交给 OS，同时不真的弹 VS Code 窗口。
+if [ "${DSH_TEST_SHIMS:-}" = "1" ]; then
+  export PATH="$ROOT/.workbuddy/shims:$PATH"
+fi
 exec "$NODE" "$DSH_BIN" --profile "$PROFILE" --host 127.0.0.1 --port "$PORT" --no-open

@@ -783,6 +783,7 @@ try {
     first.openedBodyTail = opened.body.slice(-400)
     if (!opened.composer) problems.push('远端会话打开后没有 composer')
 
+
     // 标题栏的「xx 模式」：官方 AgentPresetLabel 读
     // `sessions.byId[id].projectionValues.agentPreset`。远端行的投影值必须
     // 同时挂到行上（只写 projectionsBySession 不够），否则标签静默消失。
@@ -808,6 +809,75 @@ try {
       }
     }
     await page.screenshot({ path: path.join(OUT, 'ui-3-remote-session.png') })
+
+    // ---- 3a) 官方标题栏「更多操作 → 在应用中打开 → VS Code」 ----
+    // 这是本次唯一的交互改动：官方菜单/按钮不变，只把 app === 'vscode'
+    // 的远端请求改写成 Remote-SSH URI。dev-server 必须带 shim 启动：
+    //   DSH_TEST_SHIMS=1 scripts/dev-server.sh
+    // shim 的 xdg-open 只记录 URI，不真的弹 VS Code。
+    const shimUriFile = path.join(OUT, 'open-vscode-uri.txt')
+    if (process.env.DSH_TEST_SHIMS === '1') {
+      fs.rmSync(shimUriFile, { force: true })
+      const rawId = targetSession.key.replace(/^session:/, '')
+      const expected = await page.evaluate(async (id) => {
+        const state = await fetch('/dsh-peerbar/api/state', { credentials: 'same-origin' }).then((response) => response.json())
+        for (const host of state.hosts ?? []) {
+          for (const workspace of host.workspaces ?? []) {
+            if ((workspace.sessions ?? []).some((session) => session.rawId === id)) {
+              return { hostName: host.name, cwd: workspace.cwd }
+            }
+          }
+        }
+        return null
+      }, rawId)
+      const headerMenu = await page.evaluate(() => {
+        const button = document.querySelector('button[aria-label="更多操作"]')
+        if (!button) return false
+        button.click()
+        return true
+      })
+      const menuHas = (label) => page.evaluate((text) => {
+        const nodes = [...document.querySelectorAll('[role="menuitem"], button')]
+        return nodes.some((item) => (item.innerText ?? '').includes(text) && item.getClientRects().length > 0)
+      }, label)
+      const clickMenu = (label) => page.evaluate((text) => {
+        const nodes = [...document.querySelectorAll('[role="menuitem"], button')]
+        const node = nodes.find((item) => (item.innerText ?? '').includes(text) && item.getClientRects().length > 0)
+        if (!node) return false
+        node.click()
+        return true
+      }, label)
+      let openWith = false
+      if (headerMenu) {
+        const appeared = await until('标题栏菜单出现「在应用中打开」', () => menuHas('在应用中打开'), 3000).catch(() => false)
+        if (appeared) openWith = await clickMenu('在应用中打开')
+      }
+      let vscode = false
+      if (openWith) {
+        const appeared = await until('「在应用中打开」子菜单出现 VS Code', () => menuHas('VS Code'), 3000).catch(() => false)
+        if (appeared) vscode = await clickMenu('VS Code')
+      }
+      const call = vscode
+        ? await until(
+            'open-vscode 请求',
+            () => page.evaluate(() => (window.__DSH_PB_REQUESTS__ ?? []).find((item) => item.url.includes('/open-vscode'))),
+            5000,
+          ).catch(() => null)
+        : null
+      const uri = fs.existsSync(shimUriFile) ? fs.readFileSync(shimUriFile, 'utf8').trim() : ''
+      first.vscodeOpen = { headerMenu, openWith, vscode, expected, call, uri }
+      if (!headerMenu) problems.push('远端会话标题栏找不到「更多操作」按钮')
+      if (headerMenu && !openWith) problems.push('标题栏菜单里找不到「在应用中打开」')
+      if (openWith && !vscode) problems.push('「在应用中打开」子菜单里找不到 VS Code')
+      if (vscode && !call) problems.push('点 VS Code 后没有发出 /dsh-peerbar/api/open-vscode 请求')
+      if (call && call.payload?.ok !== true) problems.push('open-vscode 响应不是 ok')
+      if (!uri) problems.push('VS Code 项没有落到宿主半的 xdg-open shim')
+      else if (!uri.startsWith('vscode://vscode-remote/ssh-remote+')) problems.push(`open-vscode URI 形状不对：${uri}`)
+      else if (expected?.cwd && !uri.includes(expected.cwd)) problems.push(`open-vscode URI 不含会话 cwd：${uri}`)
+    } else {
+      first.vscodeOpen = { skipped: 'DSH_TEST_SHIMS != 1' }
+    }
+
 
     // ---- 3b) 远端工作区里点「新会话」：应像本机一样回到起始页 ----
     // 远端空白会话也要让官方看见 blank=true，否则中栏直接落进一个空对话，

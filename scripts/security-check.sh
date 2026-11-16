@@ -79,6 +79,48 @@ code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' \
   -X POST -H 'content-type: text/plain' -H 'x-dsh-peerbar-action: 1' -d '{}' "$BASE/dsh-peerbar/api/hosts" || true)
 [ "$code" = "415" ] && ok "非 JSON 变更请求 → 415" || bad "非 JSON 变更请求 → $code（期望 415）"
 
+# 远端工作区「在 VS Code 中打开」：只接受本机同源 + action 头 + 已知 Host 的
+# 工作区路径；失败路径绝不能落到 xdg-open。
+code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' \
+  -X POST -H 'content-type: application/json' -d '{}' \
+  "$BASE/dsh-peerbar/api/open-vscode" || true)
+[ "$code" = "403" ] && ok "open-vscode 缺自定义头 → 403" || bad "open-vscode 缺自定义头 → $code（期望 403）"
+
+code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' \
+  -X POST -H 'Origin: http://evil' -H 'content-type: application/json' \
+  -H 'x-dsh-peerbar-action: 1' -d '{}' "$BASE/dsh-peerbar/api/open-vscode" || true)
+[ "$code" = "403" ] && ok "open-vscode 跨源 Origin → 403" || bad "open-vscode 跨源 Origin → $code（期望 403）"
+
+code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' \
+  -X POST -H 'content-type: text/plain' -H 'x-dsh-peerbar-action: 1' \
+  -d '{}' "$BASE/dsh-peerbar/api/open-vscode" || true)
+[ "$code" = "415" ] && ok "open-vscode 非 JSON → 415" || bad "open-vscode 非 JSON → $code（期望 415）"
+
+code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' \
+  "$BASE/dsh-peerbar/api/open-vscode" || true)
+[ "$code" = "405" ] && ok "open-vscode GET → 405" || bad "open-vscode GET → $code（期望 405）"
+
+code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' \
+  -X POST -H 'content-type: application/json' -H 'x-dsh-peerbar-action: 1' \
+  -d '{"hostId":"h_00000000","path":"/tmp"}' "$BASE/dsh-peerbar/api/open-vscode" || true)
+[ "$code" = "404" ] && ok "open-vscode 未知 Host → 404" || bad "open-vscode 未知 Host → $code（期望 404）"
+
+host_id=$(printf '%s' "$state" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const j=JSON.parse(s);process.stdout.write(j.hosts?.[0]?.hostId??'')}catch{}})" 2>/dev/null || true)
+if [ -n "$host_id" ]; then
+  code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' \
+    -X POST -H 'content-type: application/json' -H 'x-dsh-peerbar-action: 1' \
+    -d "{\"hostId\":\"$host_id\",\"path\":\"relative/path\"}" "$BASE/dsh-peerbar/api/open-vscode" || true)
+  [ "$code" = "400" ] && ok "open-vscode 非绝对路径 → 400" || bad "open-vscode 非绝对路径 → $code（期望 400）"
+
+  code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' \
+    -X POST -H 'content-type: application/json' -H 'x-dsh-peerbar-action: 1' \
+    -d "{\"hostId\":\"$host_id\",\"path\":\"/peerbar-security-check-outside\"}" \
+    "$BASE/dsh-peerbar/api/open-vscode" || true)
+  [ "$code" = "400" ] && ok "open-vscode 越界路径 → 400" || bad "open-vscode 越界路径 → $code（期望 400）"
+else
+  say "SKIP  open-vscode 路径用例（还没有 Host）"
+fi
+
 REG="$HOME/.dsh/dsh-peerbar.json"
 if [ -f "$REG" ]; then
   mode=$(stat -c '%a' "$REG" 2>/dev/null || echo '?')
