@@ -152,6 +152,11 @@ node scripts/panel-check.mjs        # 派生面板：远端文档预览 + 自动
                                     # + 子代理目录（标题/用量/耗时、点开子会话）
 ```
 
+- 验证「官方 VS Code 项」时，dev-server 与 ui-check 都带 `DSH_TEST_SHIMS=1`：
+  dev-server 会生成假 `code` / `xdg-open`，ui-check 断言 `xdg-open` 收到
+  `vscode://vscode-remote/ssh-remote+<主机名>/<cwd>`；不带该变量时这一节跳过，
+  不会真的弹 VS Code。
+
 - 测试 profile 需要登录态/远端凭据时，从 `~/.dsh` 复制 `.credentials.yaml`、
   `dsh-peerbar.json`、`*-cache.json`（以及需要的 `sessions/`、`storages/`）到隔离 `DSH_HOME`；
   这些文件不得入库，也不要把 token 写进日志或结论。
