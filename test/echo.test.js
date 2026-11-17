@@ -199,6 +199,9 @@ test('白名单里的每个端点都要有明确归属（回写 or 已知无需�
     'session/updateQueue',
     'session/selectModel',
     'session/modelCatalog',
+    // 团队协作开关只改该会话的 Team 模式，状态经 session/control 投影回来，
+    // 侧栏工作区快照没有任何要回写的字段。
+    'agentTeams/setEnabled',
     // 会话投影：只读，供子代理目录 / plan 状态使用
     'session/projections',
     // 会话历史翻页：只读，结果只进右侧栏计划页签
