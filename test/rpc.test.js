@@ -12,6 +12,7 @@ test('白名单放行已知端点', () => {
     'session/fork',
     'session/selectModel',
     'session/modelCatalog',
+    'agentTeams/setEnabled', // 模型菜单的团队协作开关（用户亲手切换）
     'session/attachment', // 只读：远端消息里的图片按 attachmentId 取字节
     'workspace/rename',
     'workspace/delete',
